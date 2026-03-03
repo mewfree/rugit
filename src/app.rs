@@ -81,6 +81,12 @@ pub enum StatusItem {
         section: Section,
         is_expanded: bool,
     },
+    HunkHeader {
+        line: String,
+        hunk_index: usize,
+        file_path: String,
+        section: Section,
+    },
     DiffLine {
         line: String,
     },
@@ -177,8 +183,21 @@ impl App {
                 });
                 if is_expanded {
                     if let Some(diff) = self.diff_cache.get(&format!("unstaged:{}", path)) {
+                        let mut hunk_index: usize = 0;
+                        let mut seen_first_hunk = false;
                         for line in diff.lines() {
-                            items.push(StatusItem::DiffLine { line: line.to_string() });
+                            if line.starts_with("@@") {
+                                if seen_first_hunk { hunk_index += 1; }
+                                seen_first_hunk = true;
+                                items.push(StatusItem::HunkHeader {
+                                    line: line.to_string(),
+                                    hunk_index,
+                                    file_path: path.clone(),
+                                    section: Section::Unstaged,
+                                });
+                            } else {
+                                items.push(StatusItem::DiffLine { line: line.to_string() });
+                            }
                         }
                     }
                 }
@@ -204,8 +223,21 @@ impl App {
                 });
                 if is_expanded {
                     if let Some(diff) = self.diff_cache.get(&format!("staged:{}", path)) {
+                        let mut hunk_index: usize = 0;
+                        let mut seen_first_hunk = false;
                         for line in diff.lines() {
-                            items.push(StatusItem::DiffLine { line: line.to_string() });
+                            if line.starts_with("@@") {
+                                if seen_first_hunk { hunk_index += 1; }
+                                seen_first_hunk = true;
+                                items.push(StatusItem::HunkHeader {
+                                    line: line.to_string(),
+                                    hunk_index,
+                                    file_path: path.clone(),
+                                    section: Section::Staged,
+                                });
+                            } else {
+                                items.push(StatusItem::DiffLine { line: line.to_string() });
+                            }
                         }
                     }
                 }
@@ -268,6 +300,30 @@ impl App {
         }
     }
 
+    /// Extract a single hunk from a diff string as a complete patch (file header + hunk body).
+    fn extract_hunk_patch(diff: &str, hunk_index: usize) -> Option<String> {
+        let lines: Vec<&str> = diff.lines().collect();
+
+        // Collect file header lines (everything before the first @@)
+        let first_hunk_start = lines.iter().position(|l| l.starts_with("@@"))?;
+        let header: Vec<&str> = lines[..first_hunk_start].to_vec();
+
+        // Find the start of each hunk
+        let hunk_starts: Vec<usize> = lines.iter()
+            .enumerate()
+            .filter_map(|(i, l)| if l.starts_with("@@") { Some(i) } else { None })
+            .collect();
+
+        let start = *hunk_starts.get(hunk_index)?;
+        let end = hunk_starts.get(hunk_index + 1).copied().unwrap_or(lines.len());
+
+        let mut patch = header.join("\n");
+        patch.push('\n');
+        patch.push_str(&lines[start..end].join("\n"));
+        patch.push('\n');
+        Some(patch)
+    }
+
     pub fn stage_at_cursor(&mut self) -> Result<()> {
         if let Some(item) = self.items.get(self.cursor).cloned() {
             match item {
@@ -275,6 +331,7 @@ impl App {
                     match section {
                         Section::Unstaged | Section::Untracked => {
                             self.backend.stage_file(&entry.path)?;
+                            self.diff_cache.remove(&self.file_key(&section, &entry.path));
                             self.refresh()?;
                             self.status_msg = Some(format!("Staged: {}", entry.path));
                         }
@@ -287,10 +344,24 @@ impl App {
                     match section {
                         Section::Unstaged | Section::Untracked => {
                             self.backend.stage_all()?;
+                            self.diff_cache.clear();
                             self.refresh()?;
                             self.status_msg = Some("Staged all changes".to_string());
                         }
                         Section::Staged => {}
+                    }
+                }
+                StatusItem::HunkHeader { hunk_index, file_path, section, .. } => {
+                    if section == Section::Unstaged {
+                        let key = self.file_key(&section, &file_path);
+                        if let Some(diff) = self.diff_cache.get(&key).cloned() {
+                            if let Some(patch) = Self::extract_hunk_patch(&diff, hunk_index) {
+                                self.backend.apply_patch(&patch, false)?;
+                                self.diff_cache.remove(&key);
+                                self.refresh()?;
+                                self.status_msg = Some(format!("Staged hunk {}", hunk_index + 1));
+                            }
+                        }
                     }
                 }
                 _ => {}
@@ -305,6 +376,7 @@ impl App {
                 StatusItem::File { entry, section, .. } => {
                     if section == Section::Staged {
                         self.backend.unstage_file(&entry.path)?;
+                        self.diff_cache.remove(&self.file_key(&section, &entry.path));
                         self.refresh()?;
                         self.status_msg = Some(format!("Unstaged: {}", entry.path));
                     }
@@ -312,8 +384,22 @@ impl App {
                 StatusItem::Header { section, .. } => {
                     if section == Section::Staged {
                         self.backend.unstage_all()?;
+                        self.diff_cache.clear();
                         self.refresh()?;
                         self.status_msg = Some("Unstaged all changes".to_string());
+                    }
+                }
+                StatusItem::HunkHeader { hunk_index, file_path, section, .. } => {
+                    if section == Section::Staged {
+                        let key = self.file_key(&section, &file_path);
+                        if let Some(diff) = self.diff_cache.get(&key).cloned() {
+                            if let Some(patch) = Self::extract_hunk_patch(&diff, hunk_index) {
+                                self.backend.apply_patch(&patch, true)?;
+                                self.diff_cache.remove(&key);
+                                self.refresh()?;
+                                self.status_msg = Some(format!("Unstaged hunk {}", hunk_index + 1));
+                            }
+                        }
                     }
                 }
                 _ => {}

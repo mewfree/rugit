@@ -131,6 +131,10 @@ impl Backend for JjBackend {
         Ok(if out.trim().is_empty() { "Fetch successful".into() } else { out.trim().to_string() })
     }
 
+    fn apply_patch(&self, _patch: &str, _reverse: bool) -> Result<()> {
+        bail!("jj hunk staging not yet implemented")
+    }
+
     fn show_commit(&self, hash: &str) -> Result<String> {
         self.run_jj(&["show", "--no-pager", hash])
     }

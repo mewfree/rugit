@@ -65,6 +65,13 @@ fn status_item_to_list_item(item: &StatusItem) -> ListItem<'static> {
             ]))
         }
 
+        StatusItem::HunkHeader { line, .. } => {
+            ListItem::new(Line::from(Span::styled(
+                format!("    {}", line),
+                Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            )))
+        }
+
         StatusItem::DiffLine { line } => {
             let style = if line.starts_with('+') {
                 Style::new().fg(Color::Green)

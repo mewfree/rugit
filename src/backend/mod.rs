@@ -71,6 +71,7 @@ pub trait Backend {
     fn push_force_lease(&self) -> Result<String>;
     fn pull(&self) -> Result<String>;
     fn show_commit(&self, hash: &str) -> Result<String>;
+    fn apply_patch(&self, patch: &str, reverse: bool) -> Result<()>;
 }
 
 #[derive(Debug, Clone, PartialEq, ValueEnum)]

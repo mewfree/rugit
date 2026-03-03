@@ -22,7 +22,7 @@
 ** DONE C-c C-c to save/quit inline editor (Emacs style)
 ** TODO Log buffer (=l= – commit graph, navigation)
 ** TODO Diff viewer buffer (=d= on a commit or file)
-** TODO Hunk-level staging
+** DONE Hunk-level staging
 ** TODO Line-level staging
 ** TODO Branch management popup (=b=)
 ** TODO Stash popup (=z=)
