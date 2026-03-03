@@ -6,7 +6,7 @@ Built in Rust for speed and portability.
 
 #+begin_example
 ┌─ rugit ──────────────────────────────────────────────────────┐
-│ Head:     main  Add README                                    │
+│ Head:     main  Add README                                   │
 │ Push:     origin/main  (up to date)                          │
 ├──────────────────────────────────────────────────────────────┤
 │ Unstaged changes (2)                                         │
