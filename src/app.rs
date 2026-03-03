@@ -30,6 +30,7 @@ pub struct EditorState {
     pub comments: Vec<String>,
     pub pending_colon: bool,
     pub pending_ctrl_c: bool,
+    pub pending_d: bool,
     pub is_amend: bool,
 }
 
@@ -50,6 +51,7 @@ impl EditorState {
             comments,
             pending_colon: false,
             pending_ctrl_c: false,
+            pending_d: false,
             is_amend,
         }
     }

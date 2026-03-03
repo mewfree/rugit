@@ -258,7 +258,13 @@ fn run_app(
                     | Action::EditorMoveLeft
                     | Action::EditorMoveRight
                     | Action::EditorMoveUp
-                    | Action::EditorMoveDown => {}
+                    | Action::EditorMoveDown
+                    | Action::EditorDeleteBegin
+                    | Action::EditorDeleteLine
+                    | Action::EditorDeleteChar
+                    | Action::EditorLineStart
+                    | Action::EditorAppend
+                    | Action::EditorAppendEnd => {}
                 }
 
                 if app.should_quit {
@@ -338,9 +344,10 @@ fn handle_editor_key(app: &mut App, key: crossterm::event::KeyEvent) {
         }
     }
 
-    // Clear pending_ctrl_c on any other key
+    // Clear transient pending flags on any non-ctrl key
     if let Some(state) = app.editor.as_mut() {
         state.pending_ctrl_c = false;
+        // pending_d is reset per-action below (EditorDeleteBegin sets it, all others clear it)
     }
 
     let action = {
@@ -348,7 +355,7 @@ fn handle_editor_key(app: &mut App, key: crossterm::event::KeyEvent) {
             Some(s) => s,
             None => return,
         };
-        editor_key_to_action(key, &state.mode, state.pending_colon)
+        editor_key_to_action(key, &state.mode, state.pending_colon, state.pending_d)
     };
 
     match action {
@@ -362,6 +369,7 @@ fn handle_editor_key(app: &mut App, key: crossterm::event::KeyEvent) {
             if let Some(state) = app.editor.as_mut() {
                 state.mode = EditorMode::Normal;
                 state.pending_colon = false;
+                state.pending_d = false;
             }
         }
         Action::EditorChar(c) => {
@@ -408,6 +416,7 @@ fn handle_editor_key(app: &mut App, key: crossterm::event::KeyEvent) {
                 if state.cursor_col > 0 {
                     state.cursor_col -= 1;
                 }
+                state.pending_d = false;
             }
         }
         Action::EditorMoveRight => {
@@ -416,6 +425,7 @@ fn handle_editor_key(app: &mut App, key: crossterm::event::KeyEvent) {
                 if state.cursor_col < line_len {
                     state.cursor_col += 1;
                 }
+                state.pending_d = false;
             }
         }
         Action::EditorMoveUp => {
@@ -425,6 +435,7 @@ fn handle_editor_key(app: &mut App, key: crossterm::event::KeyEvent) {
                     let line_len = state.lines[state.cursor_row].len();
                     state.cursor_col = state.cursor_col.min(line_len);
                 }
+                state.pending_d = false;
             }
         }
         Action::EditorMoveDown => {
@@ -434,6 +445,66 @@ fn handle_editor_key(app: &mut App, key: crossterm::event::KeyEvent) {
                     let line_len = state.lines[state.cursor_row].len();
                     state.cursor_col = state.cursor_col.min(line_len);
                 }
+                state.pending_d = false;
+            }
+        }
+        Action::EditorLineStart => {
+            if let Some(state) = app.editor.as_mut() {
+                state.cursor_col = 0;
+                state.pending_d = false;
+            }
+        }
+        Action::EditorDeleteChar => {
+            if let Some(state) = app.editor.as_mut() {
+                let row = state.cursor_row;
+                let col = state.cursor_col;
+                if col < state.lines[row].len() {
+                    state.lines[row].remove(col);
+                    // Keep col valid
+                    let line_len = state.lines[row].len();
+                    if state.cursor_col > 0 && state.cursor_col >= line_len {
+                        state.cursor_col = line_len.saturating_sub(1);
+                    }
+                }
+                state.pending_d = false;
+            }
+        }
+        Action::EditorDeleteBegin => {
+            if let Some(state) = app.editor.as_mut() {
+                state.pending_d = true;
+            }
+        }
+        Action::EditorDeleteLine => {
+            if let Some(state) = app.editor.as_mut() {
+                if state.lines.len() == 1 {
+                    state.lines[0].clear();
+                    state.cursor_col = 0;
+                } else {
+                    state.lines.remove(state.cursor_row);
+                    if state.cursor_row >= state.lines.len() {
+                        state.cursor_row = state.lines.len() - 1;
+                    }
+                    let line_len = state.lines[state.cursor_row].len();
+                    state.cursor_col = state.cursor_col.min(line_len);
+                }
+                state.pending_d = false;
+            }
+        }
+        Action::EditorAppend => {
+            if let Some(state) = app.editor.as_mut() {
+                let line_len = state.lines[state.cursor_row].len();
+                if state.cursor_col < line_len {
+                    state.cursor_col += 1;
+                }
+                state.mode = EditorMode::Insert;
+                state.pending_d = false;
+            }
+        }
+        Action::EditorAppendEnd => {
+            if let Some(state) = app.editor.as_mut() {
+                state.cursor_col = state.lines[state.cursor_row].len();
+                state.mode = EditorMode::Insert;
+                state.pending_d = false;
             }
         }
         Action::EditorSave => {

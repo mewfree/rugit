@@ -36,6 +36,12 @@ pub enum Action {
     EditorMoveRight,
     EditorMoveUp,
     EditorMoveDown,
+    EditorDeleteBegin,  // 'd' — first key of 'dd'
+    EditorDeleteLine,   // 'dd'
+    EditorDeleteChar,   // 'x'
+    EditorLineStart,    // '0'
+    EditorAppend,       // 'a' — insert after cursor char
+    EditorAppendEnd,    // 'A' — insert at end of line
     None,
 }
 
@@ -86,7 +92,7 @@ pub fn key_to_action(key: KeyEvent, pending: Option<KeyCode>) -> Action {
     }
 }
 
-pub fn editor_key_to_action(key: KeyEvent, mode: &EditorMode, pending_colon: bool) -> Action {
+pub fn editor_key_to_action(key: KeyEvent, mode: &EditorMode, pending_colon: bool, pending_d: bool) -> Action {
     // Ctrl-C is handled by the caller (pending_ctrl_c logic for C-c C-c save).
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         return Action::None;
@@ -108,13 +114,23 @@ pub fn editor_key_to_action(key: KeyEvent, mode: &EditorMode, pending_colon: boo
                     KeyCode::Esc => Action::EditorNormalMode,
                     _ => Action::EditorNormalMode,
                 }
+            } else if pending_d {
+                match key.code {
+                    KeyCode::Char('d') => Action::EditorDeleteLine,
+                    _ => Action::EditorNormalMode, // any other key cancels
+                }
             } else {
                 match key.code {
                     KeyCode::Char('i') => Action::EditorInsertMode,
+                    KeyCode::Char('a') => Action::EditorAppend,
+                    KeyCode::Char('A') => Action::EditorAppendEnd,
                     KeyCode::Char('h') | KeyCode::Left  => Action::EditorMoveLeft,
                     KeyCode::Char('j') | KeyCode::Down  => Action::EditorMoveDown,
                     KeyCode::Char('k') | KeyCode::Up    => Action::EditorMoveUp,
                     KeyCode::Char('l') | KeyCode::Right => Action::EditorMoveRight,
+                    KeyCode::Char('0') => Action::EditorLineStart,
+                    KeyCode::Char('x') => Action::EditorDeleteChar,
+                    KeyCode::Char('d') => Action::EditorDeleteBegin,
                     KeyCode::Char('q') => Action::EditorAbort,
                     KeyCode::Enter => Action::EditorSave,
                     KeyCode::Char(':') => Action::EditorChar(':'),
