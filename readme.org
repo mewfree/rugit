@@ -69,48 +69,40 @@ or two keystrokes away.
 
 ** Global
 
-| Key       | Action                      |
-|-----------+-----------------------------|
-| =?=       | Show key binding help       |
-| =q=       | Quit / close current buffer |
-| =g=       | Refresh                     |
-| =Tab=     | Expand / collapse section   |
-| =j= / =k= | Move down / up              |
-| =G=       | Open log buffer             |
-| =b=       | Branch menu                 |
-| =r=       | Rebase menu                 |
-| =m=       | Merge menu                  |
-| =z=       | Stash menu                  |
-| =!=       | Run arbitrary git command   |
+| Key       | Action                  |
+|-----------+-------------------------|
+| =?=       | Show key binding help   |
+| =q=       | Quit                    |
+| =g=       | Refresh status          |
+| =Tab=     | Expand / collapse diff  |
+| =j= / =k= | Move down / up          |
+| =l=       | Open log buffer         |
+| =b=       | Return to status buffer |
 
 ** Status buffer
 
-| Key   | Action                                      |
-|-------+---------------------------------------------|
-| =s=   | Stage file / hunk / region                  |
-| =u=   | Unstage file / hunk / region                |
-| =S=   | Stage all unstaged changes                  |
-| =U=   | Unstage all staged changes                  |
-| =d=   | Discard file / hunk / region                |
-| =c c= | Commit staged changes                       |
-| =c a= | Amend last commit                           |
-| =c w= | Reword last commit message                  |
-| =c e= | Extend last commit (amend without rewording)|
-| =c f= | Fixup into a previous commit                |
-| =c s= | Squash into a previous commit               |
-| =F=   | Pull                                        |
-| =P=   | Push                                        |
+| Key     | Action                      |
+|---------+-----------------------------|
+| =s=     | Stage file or hunk at point |
+| =u=     | Unstage file or hunk        |
+| =S=     | Stage all unstaged changes  |
+| =U=     | Unstage all staged changes  |
+| =c=     | Open commit menu            |
+| =c c=   | Commit staged changes       |
+| =c a=   | Amend last commit           |
+| =p=     | Open push menu              |
+| =p p=   | Push to upstream            |
+| =p f=   | Force-push (with-lease)     |
+| =F=     | Pull from upstream          |
+| =Enter= | Preview commit at point     |
 
 ** Log buffer
 
-| Key       | Action                    |
-|-----------+---------------------------|
-| =Enter=   | Show commit details       |
-| =d=       | Diff commit against HEAD  |
-| =r i=     | Interactive rebase here   |
-| =t=       | Tag commit                |
-| =y=       | Copy commit hash          |
-| =/=       | Search commits            |
+| Key       | Action           |
+|-----------+------------------|
+| =j= / =k= | Move down / up   |
+| =Enter=   | Preview commit   |
+| =b=       | Return to status |
 
 * Jujutsu support
 

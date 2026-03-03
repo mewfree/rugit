@@ -131,22 +131,29 @@ fn build_footer(app: &App) -> Line<'static> {
             Span::styled(msg.clone(), Style::new().fg(Color::Green)),
         ])
     } else {
+        let key = |s: &'static str| Span::styled(s, Style::new().fg(Color::LightCyan));
+        let sep = || Span::raw("  ");
         Line::from(vec![
             Span::raw(" "),
-            Span::styled("[s]", Style::new().fg(Color::LightCyan)),
-            Span::raw("tage "),
-            Span::styled("[u]", Style::new().fg(Color::LightCyan)),
-            Span::raw("nstage "),
-            Span::styled("[c c]", Style::new().fg(Color::LightCyan)),
-            Span::raw("commit "),
-            Span::styled("[l]", Style::new().fg(Color::LightCyan)),
-            Span::raw("og "),
-            Span::styled("[g]", Style::new().fg(Color::LightCyan)),
-            Span::raw("refresh "),
-            Span::styled("[?]", Style::new().fg(Color::LightCyan)),
-            Span::raw("help "),
-            Span::styled("[q]", Style::new().fg(Color::LightCyan)),
-            Span::raw("uit"),
+            key("[s/S]"), Span::raw("tage"),
+            sep(),
+            key("[u/U]"), Span::raw("nstage"),
+            sep(),
+            key("[Tab]"), Span::raw("expand"),
+            sep(),
+            key("[c]"), Span::raw("ommit"),
+            sep(),
+            key("[p]"), Span::raw("ush"),
+            sep(),
+            key("[F]"), Span::raw("pull"),
+            sep(),
+            key("[l]"), Span::raw("og"),
+            sep(),
+            key("[g]"), Span::raw("refresh"),
+            sep(),
+            key("[?]"), Span::raw("help"),
+            sep(),
+            key("[q]"), Span::raw("uit"),
         ])
     }
 }

@@ -23,6 +23,7 @@
 ** TODO Log buffer (=l= – commit graph, navigation)
 ** TODO Diff viewer buffer (=d= on a commit or file)
 ** DONE Hunk-level staging
+** DONE Exhaustive footer bar (s/S, u/U, Tab, c, p, F, l, g, ?, q)
 ** TODO Line-level staging
 ** TODO Branch management popup (=b=)
 ** TODO Stash popup (=z=)
