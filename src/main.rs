@@ -77,15 +77,6 @@ fn run_app(
                     continue;
                 }
 
-                // Dismiss remote op result popup on q or Esc
-                if app.remote_op_result.is_some() {
-                    if matches!(key.code, KeyCode::Char('q') | KeyCode::Esc) {
-                        app.remote_op_result = None;
-                        app.status_msg = None;
-                    }
-                    continue;
-                }
-
                 // Handle commit preview popup — scroll or dismiss
                 if app.commit_preview.is_some() {
                     match key.code {
@@ -248,14 +239,8 @@ fn run_app(
                         app.status_msg = Some("Pushing…".to_string());
                         terminal.draw(|f| ui::render(f, app))?;
                         match app.backend.push() {
-                            Ok(msg) => {
-                                app.status_msg = Some("Push complete — press q to dismiss".to_string());
-                                app.remote_op_result = Some(("Push Result".to_string(), msg));
-                            }
-                            Err(e) => {
-                                app.remote_op_result = Some(("Push Error".to_string(), e.to_string()));
-                                app.status_msg = Some("Push failed — press q to dismiss".to_string());
-                            }
+                            Ok(_)  => app.status_msg = Some("Pushed.".to_string()),
+                            Err(e) => app.status_msg = Some(format!("Push failed: {}", first_line(&e.to_string()))),
                         }
                         let _ = app.refresh();
                     }
@@ -264,14 +249,8 @@ fn run_app(
                         app.status_msg = Some("Force-pushing…".to_string());
                         terminal.draw(|f| ui::render(f, app))?;
                         match app.backend.push_force_lease() {
-                            Ok(msg) => {
-                                app.status_msg = Some("Force-push complete — press q to dismiss".to_string());
-                                app.remote_op_result = Some(("Force-Push Result".to_string(), msg));
-                            }
-                            Err(e) => {
-                                app.remote_op_result = Some(("Force-Push Error".to_string(), e.to_string()));
-                                app.status_msg = Some("Force-push failed — press q to dismiss".to_string());
-                            }
+                            Ok(_)  => app.status_msg = Some("Force-pushed.".to_string()),
+                            Err(e) => app.status_msg = Some(format!("Force-push failed: {}", first_line(&e.to_string()))),
                         }
                         let _ = app.refresh();
                     }
@@ -280,14 +259,8 @@ fn run_app(
                         app.status_msg = Some("Pulling…".to_string());
                         terminal.draw(|f| ui::render(f, app))?;
                         match app.backend.pull() {
-                            Ok(msg) => {
-                                app.status_msg = Some("Pull complete — press q to dismiss".to_string());
-                                app.remote_op_result = Some(("Pull Result".to_string(), msg));
-                            }
-                            Err(e) => {
-                                app.remote_op_result = Some(("Pull Error".to_string(), e.to_string()));
-                                app.status_msg = Some("Pull failed — press q to dismiss".to_string());
-                            }
+                            Ok(_)  => app.status_msg = Some("Pulled.".to_string()),
+                            Err(e) => app.status_msg = Some(format!("Pull failed: {}", first_line(&e.to_string()))),
                         }
                         let _ = app.refresh();
                     }
@@ -612,4 +585,9 @@ fn get_staged_summary(app: &App) -> Vec<String> {
         .iter()
         .map(|e| format!("{} {}", e.kind, e.path))
         .collect()
+}
+
+
+fn first_line(s: &str) -> &str {
+    s.lines().next().unwrap_or(s)
 }

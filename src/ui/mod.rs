@@ -73,11 +73,6 @@ pub fn render(f: &mut Frame, app: &mut App) {
         popup::render_push_popup(f, area);
     }
 
-    // Remote op result popup (overlays everything)
-    if let Some((title, output)) = &app.remote_op_result.clone() {
-        popup::render_remote_result(f, area, title, output);
-    }
-
     // Footer
     let footer = Paragraph::new(footer_text)
         .style(Style::new().bg(Color::Rgb(20, 30, 70)).fg(Color::White));
