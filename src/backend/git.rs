@@ -345,5 +345,17 @@ impl Backend for GitBackend {
         }
         Ok(commits)
     }
+
+    fn show_commit(&self, hash: &str) -> Result<String> {
+        let out = std::process::Command::new("git")
+            .args(["show", "--stat", "-p", "--color=never", hash])
+            .current_dir(&self.root)
+            .output()?;
+        if out.status.success() {
+            Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+        } else {
+            anyhow::bail!("{}", String::from_utf8_lossy(&out.stderr).trim())
+        }
+    }
 }
 

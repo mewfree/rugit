@@ -131,6 +131,10 @@ impl Backend for JjBackend {
         Ok(if out.trim().is_empty() { "Fetch successful".into() } else { out.trim().to_string() })
     }
 
+    fn show_commit(&self, hash: &str) -> Result<String> {
+        self.run_jj(&["show", "--no-pager", hash])
+    }
+
     fn log(&self, limit: usize) -> Result<Vec<CommitInfo>> {
         let template = r#"separate("\x1f", change_id.short(), description.first_line(), author.name(), author.timestamp()) ++ "\n""#;
         let limit_str = limit.to_string();

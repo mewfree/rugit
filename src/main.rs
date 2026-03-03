@@ -86,6 +86,14 @@ fn run_app(
                     continue;
                 }
 
+                // Dismiss commit preview popup on q or Esc
+                if app.commit_preview.is_some() {
+                    if matches!(key.code, KeyCode::Char('q') | KeyCode::Esc) {
+                        app.commit_preview = None;
+                    }
+                    continue;
+                }
+
                 // Route to inline editor if in editor mode
                 if app.buffer == ActiveBuffer::Editor {
                     handle_editor_key(app, key);
@@ -177,6 +185,24 @@ fn run_app(
                         app.buffer = ActiveBuffer::Help;
                         app.pending_key = None;
                     }
+                    Action::Enter => {
+                        if let Some(crate::app::StatusItem::RecentCommit { info }) =
+                            app.items.get(app.cursor).cloned()
+                        {
+                            match app.backend.show_commit(&info.short_hash) {
+                                Ok(content) => {
+                                    app.commit_preview = Some((
+                                        format!("{} {}", info.short_hash, info.summary),
+                                        content,
+                                    ));
+                                }
+                                Err(e) => {
+                                    app.status_msg = Some(format!("Error: {}", e));
+                                }
+                            }
+                        }
+                        app.pending_key = None;
+                    }
                     Action::CommitBegin => {
                         app.pending_key = Some(crossterm::event::KeyCode::Char('c'));
                         app.status_msg = Some("c-".to_string());
@@ -192,7 +218,7 @@ fn run_app(
                         }
                     }
                     Action::PushBegin => {
-                        app.pending_key = Some(crossterm::event::KeyCode::Char('P'));
+                        app.pending_key = Some(crossterm::event::KeyCode::Char('p'));
                         app.status_msg = Some("P-".to_string());
                     }
                     Action::Push => {

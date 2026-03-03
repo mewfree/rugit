@@ -20,6 +20,7 @@ pub enum Action {
     CommitBegin,  // first 'c' of 'c c'
     CommitConfirm, // second 'c'
     CommitAmendConfirm, // 'a' after 'c'
+    Enter,
     PushBegin,    // 'P' — opens push submenu
     Push,         // 'P p'
     PushForce,    // 'P f'
@@ -62,7 +63,7 @@ pub fn key_to_action(key: KeyEvent, pending: Option<KeyCode>) -> Action {
                 KeyCode::Char('a') => return Action::CommitAmendConfirm,
                 _ => return Action::None,
             },
-            KeyCode::Char('P') => match key.code {
+            KeyCode::Char('p') => match key.code {
                 KeyCode::Char('p') => return Action::Push,
                 KeyCode::Char('f') => return Action::PushForce,
                 _ => return Action::None,
@@ -85,8 +86,9 @@ pub fn key_to_action(key: KeyEvent, pending: Option<KeyCode>) -> Action {
         KeyCode::Char('g') => Action::Refresh,
         KeyCode::Char('?') => Action::ShowHelp,
         KeyCode::Esc => Action::HideHelp,
+        KeyCode::Enter => Action::Enter,
         KeyCode::Char('c') => Action::CommitBegin,
-        KeyCode::Char('P') => Action::PushBegin,
+        KeyCode::Char('p') => Action::PushBegin,
         KeyCode::Char('F') => Action::Pull,
         _ => Action::None,
     }

@@ -67,8 +67,8 @@ pub fn render_help(f: &mut Frame, area: Rect) {
             Span::raw("Show this help"),
         ]),
         Line::from(vec![
-            Span::styled("  P         ", Style::new().fg(Color::Cyan)),
-            Span::raw("Push menu (P p: push  P f: force-push)"),
+            Span::styled("  p         ", Style::new().fg(Color::Cyan)),
+            Span::raw("Push menu (p p: push  p f: force-push)"),
         ]),
         Line::from(vec![
             Span::styled("  F         ", Style::new().fg(Color::Cyan)),
@@ -89,6 +89,44 @@ pub fn render_help(f: &mut Frame, area: Rect) {
                 .border_style(Style::new().fg(Color::Yellow)),
         )
         .alignment(Alignment::Left);
+
+    f.render_widget(paragraph, popup_area);
+}
+
+pub fn render_commit_preview(f: &mut Frame, area: Rect, title: &str, content: &str) {
+    let popup_area = centered_rect(90, 85, area);
+    f.render_widget(Clear, popup_area);
+
+    let mut lines: Vec<Line> = content.lines().map(|l| {
+        let style = if l.starts_with('+') && !l.starts_with("+++") {
+            Style::new().fg(Color::Green)
+        } else if l.starts_with('-') && !l.starts_with("---") {
+            Style::new().fg(Color::Red)
+        } else if l.starts_with("@@") {
+            Style::new().fg(Color::Cyan)
+        } else if l.starts_with("commit ") || l.starts_with("Author:") || l.starts_with("Date:") {
+            Style::new().fg(Color::Yellow)
+        } else {
+            Style::new()
+        };
+        Line::from(Span::styled(l.to_owned(), style))
+    }).collect();
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  q / Esc to close",
+        Style::new().fg(Color::DarkGray),
+    )));
+
+    let paragraph = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title(format!(" {} ", title))
+                .title_alignment(Alignment::Center)
+                .borders(Borders::ALL)
+                .border_style(Style::new().fg(Color::Yellow)),
+        )
+        .wrap(ratatui::widgets::Wrap { trim: false });
 
     f.render_widget(paragraph, popup_area);
 }

@@ -103,6 +103,7 @@ pub struct App {
     pub pending_key: Option<KeyCode>,
     pub status_msg: Option<String>,
     pub remote_op_result: Option<(String, String)>, // (title, output)
+    pub commit_preview: Option<(String, String, u16)>, // (title, content, scroll)
     pub should_quit: bool,
     pub recent_commits: Vec<CommitInfo>,
     /// Flat list of visible status items (rebuilt on refresh)
@@ -126,6 +127,7 @@ impl App {
             pending_key: None,
             status_msg: None,
             remote_op_result: None,
+            commit_preview: None,
             should_quit: false,
             recent_commits,
             items: Vec::new(),

@@ -58,13 +58,18 @@ pub fn render(f: &mut Frame, app: &mut App) {
         }
     }
 
+    // Commit preview popup
+    if let Some((title, content)) = &app.commit_preview.clone() {
+        popup::render_commit_preview(f, area, title, content);
+    }
+
     // Commit submenu popup
     if app.pending_key == Some(KeyCode::Char('c')) {
         popup::render_commit_popup(f, area);
     }
 
     // Push submenu popup
-    if app.pending_key == Some(KeyCode::Char('P')) {
+    if app.pending_key == Some(KeyCode::Char('p')) {
         popup::render_push_popup(f, area);
     }
 
