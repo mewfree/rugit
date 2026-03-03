@@ -7,77 +7,49 @@ use ratatui::{
 };
 
 pub fn render_help(f: &mut Frame, area: Rect) {
-    let popup_area = centered_rect(60, 70, area);
+    let popup_area = centered_rect(60, 90, area);
 
     // Clear the background
     f.render_widget(Clear, popup_area);
 
+    let section = |s: &'static str| Line::from(Span::styled(
+        s, Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+    ));
+    let key = |k: &'static str, desc: &'static str| Line::from(vec![
+        Span::styled(k, Style::new().fg(Color::Cyan)),
+        Span::raw(desc),
+    ]);
+
     let help_lines = vec![
-        Line::from(Span::styled(
-            "Keybindings",
-            Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-        )),
+        section("  Navigation"),
+        key("  j / ↓       ", "Move down"),
+        key("  k / ↑       ", "Move up"),
+        key("  Tab         ", "Expand / collapse diff"),
+        key("  Enter       ", "Preview commit"),
         Line::from(""),
-        Line::from(vec![
-            Span::styled("  j / ↓     ", Style::new().fg(Color::Cyan)),
-            Span::raw("Move down"),
-        ]),
-        Line::from(vec![
-            Span::styled("  k / ↑     ", Style::new().fg(Color::Cyan)),
-            Span::raw("Move up"),
-        ]),
-        Line::from(vec![
-            Span::styled("  s         ", Style::new().fg(Color::Cyan)),
-            Span::raw("Stage file / section"),
-        ]),
-        Line::from(vec![
-            Span::styled("  u         ", Style::new().fg(Color::Cyan)),
-            Span::raw("Unstage file / section"),
-        ]),
-        Line::from(vec![
-            Span::styled("  S         ", Style::new().fg(Color::Cyan)),
-            Span::raw("Stage all changes"),
-        ]),
-        Line::from(vec![
-            Span::styled("  U         ", Style::new().fg(Color::Cyan)),
-            Span::raw("Unstage all changes"),
-        ]),
-        Line::from(vec![
-            Span::styled("  Tab       ", Style::new().fg(Color::Cyan)),
-            Span::raw("Toggle diff expansion"),
-        ]),
-        Line::from(vec![
-            Span::styled("  c c       ", Style::new().fg(Color::Cyan)),
-            Span::raw("Commit (opens $EDITOR)"),
-        ]),
-        Line::from(vec![
-            Span::styled("  l         ", Style::new().fg(Color::Cyan)),
-            Span::raw("Switch to log view"),
-        ]),
-        Line::from(vec![
-            Span::styled("  b         ", Style::new().fg(Color::Cyan)),
-            Span::raw("Switch to status view"),
-        ]),
-        Line::from(vec![
-            Span::styled("  g         ", Style::new().fg(Color::Cyan)),
-            Span::raw("Refresh"),
-        ]),
-        Line::from(vec![
-            Span::styled("  ?         ", Style::new().fg(Color::Cyan)),
-            Span::raw("Show this help"),
-        ]),
-        Line::from(vec![
-            Span::styled("  p         ", Style::new().fg(Color::Cyan)),
-            Span::raw("Push menu (p p: push  p f: force-push)"),
-        ]),
-        Line::from(vec![
-            Span::styled("  F         ", Style::new().fg(Color::Cyan)),
-            Span::raw("Pull / fetch"),
-        ]),
-        Line::from(vec![
-            Span::styled("  Esc / q   ", Style::new().fg(Color::Cyan)),
-            Span::raw("Quit / close help"),
-        ]),
+        section("  Staging"),
+        key("  s           ", "Stage file or hunk at point"),
+        key("  u           ", "Unstage file or hunk at point"),
+        key("  S           ", "Stage all changes"),
+        key("  U           ", "Unstage all changes"),
+        Line::from(""),
+        section("  Commits"),
+        key("  c           ", "Open commit menu"),
+        key("  c c         ", "Commit staged changes"),
+        key("  c a         ", "Amend last commit"),
+        Line::from(""),
+        section("  Remotes"),
+        key("  p           ", "Open push menu"),
+        key("  p p         ", "Push to upstream"),
+        key("  p f         ", "Force-push (--force-with-lease)"),
+        key("  F           ", "Pull from upstream"),
+        Line::from(""),
+        section("  Views & misc"),
+        key("  l           ", "Switch to log view"),
+        key("  b           ", "Switch to status view"),
+        key("  g           ", "Refresh"),
+        key("  ?           ", "Show this help"),
+        key("  q / Esc     ", "Quit / close"),
     ];
 
     let paragraph = Paragraph::new(help_lines)
