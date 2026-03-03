@@ -31,7 +31,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
 
     // Header
     let header = Paragraph::new(head_text)
-        .style(Style::new().bg(Color::DarkGray).fg(Color::White));
+        .style(Style::new().bg(Color::Rgb(20, 30, 70)).fg(Color::White));
     f.render_widget(header, chunks[0]);
 
     // Main content
@@ -51,7 +51,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
 
     // Footer
     let footer = Paragraph::new(footer_text)
-        .style(Style::new().bg(Color::DarkGray).fg(Color::White));
+        .style(Style::new().bg(Color::Rgb(20, 30, 70)).fg(Color::White));
     f.render_widget(footer, chunks[2]);
 }
 
@@ -67,7 +67,7 @@ fn build_head_line(app: &App) -> Line<'static> {
                 Span::raw("│ "),
                 Span::styled(
                     format!("head: {} · {} ", branch, hash),
-                    Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                    Style::new().fg(Color::LightCyan).add_modifier(Modifier::BOLD),
                 ),
                 Span::raw(summary.clone()),
             ])
@@ -81,7 +81,7 @@ fn build_head_line(app: &App) -> Line<'static> {
                 Span::raw("│ "),
                 Span::styled(
                     format!("head: {} ", branch),
-                    Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                    Style::new().fg(Color::LightCyan).add_modifier(Modifier::BOLD),
                 ),
             ])
         }
@@ -104,19 +104,19 @@ fn build_footer(app: &App) -> Line<'static> {
     } else {
         Line::from(vec![
             Span::raw(" "),
-            Span::styled("[s]", Style::new().fg(Color::Yellow)),
+            Span::styled("[s]", Style::new().fg(Color::LightCyan)),
             Span::raw("tage "),
-            Span::styled("[u]", Style::new().fg(Color::Yellow)),
+            Span::styled("[u]", Style::new().fg(Color::LightCyan)),
             Span::raw("nstage "),
-            Span::styled("[c c]", Style::new().fg(Color::Yellow)),
+            Span::styled("[c c]", Style::new().fg(Color::LightCyan)),
             Span::raw("commit "),
-            Span::styled("[l]", Style::new().fg(Color::Yellow)),
+            Span::styled("[l]", Style::new().fg(Color::LightCyan)),
             Span::raw("og "),
-            Span::styled("[g]", Style::new().fg(Color::Yellow)),
+            Span::styled("[g]", Style::new().fg(Color::LightCyan)),
             Span::raw("refresh "),
-            Span::styled("[?]", Style::new().fg(Color::Yellow)),
+            Span::styled("[?]", Style::new().fg(Color::LightCyan)),
             Span::raw("help "),
-            Span::styled("[q]", Style::new().fg(Color::Yellow)),
+            Span::styled("[q]", Style::new().fg(Color::LightCyan)),
             Span::raw("uit"),
         ])
     }

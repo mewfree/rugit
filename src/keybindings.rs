@@ -18,6 +18,8 @@ pub enum Action {
     CommitBegin,  // first 'c' of 'c c'
     CommitConfirm, // second 'c'
     CommitAmendConfirm, // 'a' after 'c'
+    Push,
+    Pull,
     None,
 }
 
@@ -57,6 +59,8 @@ pub fn key_to_action(key: KeyEvent, pending: Option<KeyCode>) -> Action {
         KeyCode::Char('?') => Action::ShowHelp,
         KeyCode::Esc => Action::HideHelp,
         KeyCode::Char('c') => Action::CommitBegin,
+        KeyCode::Char('P') => Action::Push,
+        KeyCode::Char('F') => Action::Pull,
         _ => Action::None,
     }
 }

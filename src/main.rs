@@ -173,6 +173,22 @@ fn run_app(
                         app.pending_key = None;
                         app.status_msg = Some("Amend not yet implemented".to_string());
                     }
+                    Action::Push => {
+                        app.pending_key = None;
+                        match do_git_remote_op(terminal, || app.backend.push()) {
+                            Ok(msg) => app.status_msg = Some(msg),
+                            Err(e) => app.status_msg = Some(format!("Push error: {}", e)),
+                        }
+                        let _ = app.refresh();
+                    }
+                    Action::Pull => {
+                        app.pending_key = None;
+                        match do_git_remote_op(terminal, || app.backend.pull()) {
+                            Ok(msg) => app.status_msg = Some(msg),
+                            Err(e) => app.status_msg = Some(format!("Pull error: {}", e)),
+                        }
+                        let _ = app.refresh();
+                    }
                     Action::None => {
                         // Clear pending key if it doesn't form a valid chord
                         app.pending_key = None;
@@ -186,6 +202,36 @@ fn run_app(
         }
     }
     Ok(())
+}
+
+/// Suspend the TUI, run a closure (which may print to stdout/stderr or prompt
+/// for credentials), then restore the TUI.  Returns the closure's Result.
+fn do_git_remote_op<F>(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    f: F,
+) -> Result<String>
+where
+    F: FnOnce() -> Result<String>,
+{
+    disable_raw_mode()?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture,
+    )?;
+    terminal.show_cursor()?;
+
+    let result = f();
+
+    enable_raw_mode()?;
+    execute!(
+        terminal.backend_mut(),
+        EnterAlternateScreen,
+        EnableMouseCapture,
+    )?;
+    terminal.clear()?;
+
+    result
 }
 
 fn do_commit(

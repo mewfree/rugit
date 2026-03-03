@@ -66,6 +66,8 @@ pub trait Backend {
     fn unstage_all(&self) -> Result<()>;
     fn commit(&self, message: &str) -> Result<()>;
     fn log(&self, limit: usize) -> Result<Vec<CommitInfo>>;
+    fn push(&self) -> Result<String>;
+    fn pull(&self) -> Result<String>;
 }
 
 #[derive(Debug, Clone, PartialEq, ValueEnum)]

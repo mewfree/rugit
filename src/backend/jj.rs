@@ -113,6 +113,16 @@ impl Backend for JjBackend {
         bail!("jj write ops not yet implemented")
     }
 
+    fn push(&self) -> Result<String> {
+        let out = self.run_jj(&["git", "push"])?;
+        Ok(if out.trim().is_empty() { "Push successful".into() } else { out.trim().to_string() })
+    }
+
+    fn pull(&self) -> Result<String> {
+        let out = self.run_jj(&["git", "fetch"])?;
+        Ok(if out.trim().is_empty() { "Fetch successful".into() } else { out.trim().to_string() })
+    }
+
     fn log(&self, limit: usize) -> Result<Vec<CommitInfo>> {
         let template = r#"separate("\x1f", change_id.short(), description.first_line(), author.name(), author.timestamp()) ++ "\n""#;
         let limit_str = limit.to_string();

@@ -3,6 +3,7 @@ use anyhow::Result;
 use crossterm::event::KeyCode;
 
 use crate::backend::{Backend, CommitInfo, FileEntry, RepoStatus};
+
 use crate::config::Config;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -29,10 +30,16 @@ pub enum StatusItem {
     File {
         entry: FileEntry,
         section: Section,
+        is_expanded: bool,
     },
     Diff {
         lines: Vec<String>,
     },
+    RecentHeader,
+    RecentCommit {
+        info: CommitInfo,
+    },
+    Spacer,
 }
 
 pub struct App {
@@ -47,6 +54,7 @@ pub struct App {
     pub pending_key: Option<KeyCode>,
     pub status_msg: Option<String>,
     pub should_quit: bool,
+    pub recent_commits: Vec<CommitInfo>,
     /// Flat list of visible status items (rebuilt on refresh)
     pub items: Vec<StatusItem>,
 }
@@ -54,6 +62,7 @@ pub struct App {
 impl App {
     pub fn new(backend: Box<dyn Backend>, config: Config) -> Result<Self> {
         let status = backend.status()?;
+        let recent_commits = backend.log(5).unwrap_or_default();
         let mut app = Self {
             backend,
             config,
@@ -66,6 +75,7 @@ impl App {
             pending_key: None,
             status_msg: None,
             should_quit: false,
+            recent_commits,
             items: Vec::new(),
         };
         app.rebuild_items();
@@ -74,7 +84,7 @@ impl App {
 
     /// Rebuild the flat items list from current status + expanded set.
     pub fn rebuild_items(&mut self) {
-        let mut items = Vec::new();
+        let mut items = vec![StatusItem::Spacer];
 
         // Staged section
         if !self.status.staged.is_empty() {
@@ -85,11 +95,14 @@ impl App {
             });
             for entry in &self.status.staged {
                 let path = entry.path.clone();
+                let key = format!("staged:{}", path);
+                let is_expanded = self.expanded.contains(&key);
                 items.push(StatusItem::File {
                     entry: entry.clone(),
                     section: Section::Staged,
+                    is_expanded,
                 });
-                if self.expanded.contains(&format!("staged:{}", path)) {
+                if is_expanded {
                     if let Some(diff) = self.diff_cache.get(&format!("staged:{}", path)) {
                         let lines: Vec<String> = diff.lines().map(String::from).collect();
                         items.push(StatusItem::Diff { lines });
@@ -100,6 +113,7 @@ impl App {
 
         // Unstaged section
         if !self.status.unstaged.is_empty() {
+            if !items.is_empty() { items.push(StatusItem::Spacer); }
             items.push(StatusItem::Header {
                 label: "Unstaged Changes".to_string(),
                 count: self.status.unstaged.len(),
@@ -107,11 +121,14 @@ impl App {
             });
             for entry in &self.status.unstaged {
                 let path = entry.path.clone();
+                let key = format!("unstaged:{}", path);
+                let is_expanded = self.expanded.contains(&key);
                 items.push(StatusItem::File {
                     entry: entry.clone(),
                     section: Section::Unstaged,
+                    is_expanded,
                 });
-                if self.expanded.contains(&format!("unstaged:{}", path)) {
+                if is_expanded {
                     if let Some(diff) = self.diff_cache.get(&format!("unstaged:{}", path)) {
                         let lines: Vec<String> = diff.lines().map(String::from).collect();
                         items.push(StatusItem::Diff { lines });
@@ -122,6 +139,7 @@ impl App {
 
         // Untracked section
         if !self.status.untracked.is_empty() {
+            if !items.is_empty() { items.push(StatusItem::Spacer); }
             items.push(StatusItem::Header {
                 label: "Untracked Files".to_string(),
                 count: self.status.untracked.len(),
@@ -131,7 +149,17 @@ impl App {
                 items.push(StatusItem::File {
                     entry: entry.clone(),
                     section: Section::Untracked,
+                    is_expanded: false,
                 });
+            }
+        }
+
+        // Recent commits section
+        if !self.recent_commits.is_empty() {
+            if !items.is_empty() { items.push(StatusItem::Spacer); }
+            items.push(StatusItem::RecentHeader);
+            for info in &self.recent_commits {
+                items.push(StatusItem::RecentCommit { info: info.clone() });
             }
         }
 
@@ -140,6 +168,7 @@ impl App {
 
     pub fn refresh(&mut self) -> Result<()> {
         self.status = self.backend.status()?;
+        self.recent_commits = self.backend.log(5).unwrap_or_default();
         self.rebuild_items();
         // Clamp cursor
         if !self.items.is_empty() && self.cursor >= self.items.len() {
@@ -169,7 +198,7 @@ impl App {
     pub fn stage_at_cursor(&mut self) -> Result<()> {
         if let Some(item) = self.items.get(self.cursor).cloned() {
             match item {
-                StatusItem::File { entry, section } => {
+                StatusItem::File { entry, section, .. } => {
                     match section {
                         Section::Unstaged | Section::Untracked => {
                             self.backend.stage_file(&entry.path)?;
@@ -200,7 +229,7 @@ impl App {
     pub fn unstage_at_cursor(&mut self) -> Result<()> {
         if let Some(item) = self.items.get(self.cursor).cloned() {
             match item {
-                StatusItem::File { entry, section } => {
+                StatusItem::File { entry, section, .. } => {
                     if section == Section::Staged {
                         self.backend.unstage_file(&entry.path)?;
                         self.refresh()?;
@@ -235,23 +264,21 @@ impl App {
     }
 
     pub fn toggle_expand_at_cursor(&mut self) -> Result<()> {
-        if let Some(item) = self.items.get(self.cursor).cloned() {
-            if let StatusItem::File { entry, section } = item {
-                let key = match section {
-                    Section::Staged => format!("staged:{}", entry.path),
-                    Section::Unstaged => format!("unstaged:{}", entry.path),
-                    Section::Untracked => format!("untracked:{}", entry.path),
-                };
+        let item = match self.items.get(self.cursor).cloned() {
+            Some(i) => i,
+            None => return Ok(()),
+        };
+
+        match item {
+            StatusItem::File { entry, section, .. } => {
+                let key = self.file_key(&section, &entry.path);
                 let staged = section == Section::Staged;
                 if self.expanded.contains(&key) {
                     self.expanded.remove(&key);
                 } else {
-                    // Fetch diff if not cached
                     if !self.diff_cache.contains_key(&key) {
                         match self.backend.diff_file(&entry.path, staged) {
-                            Ok(diff) => {
-                                self.diff_cache.insert(key.clone(), diff);
-                            }
+                            Ok(diff) => { self.diff_cache.insert(key.clone(), diff); }
                             Err(e) => {
                                 self.status_msg = Some(format!("Diff error: {}", e));
                                 return Ok(());
@@ -262,8 +289,30 @@ impl App {
                 }
                 self.rebuild_items();
             }
+            StatusItem::Diff { .. } => {
+                // Collapse the parent File item sitting directly above this Diff
+                if self.cursor > 0 {
+                    if let Some(StatusItem::File { entry, section, .. }) =
+                        self.items.get(self.cursor - 1).cloned()
+                    {
+                        let key = self.file_key(&section, &entry.path);
+                        self.expanded.remove(&key);
+                        self.cursor -= 1;
+                        self.rebuild_items();
+                    }
+                }
+            }
+            _ => {}
         }
         Ok(())
+    }
+
+    fn file_key(&self, section: &Section, path: &str) -> String {
+        match section {
+            Section::Staged => format!("staged:{}", path),
+            Section::Unstaged => format!("unstaged:{}", path),
+            Section::Untracked => format!("untracked:{}", path),
+        }
     }
 
     pub fn load_log(&mut self) -> Result<()> {

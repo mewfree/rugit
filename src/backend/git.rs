@@ -233,6 +233,45 @@ impl Backend for GitBackend {
         Ok(())
     }
 
+    fn push(&self) -> Result<String> {
+        let out = std::process::Command::new("git")
+            .args(["push"])
+            .current_dir(&self.root)
+            .output()?;
+        // git writes progress to stderr even on success
+        let combined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr),
+        )
+        .trim()
+        .to_string();
+        if out.status.success() {
+            Ok(if combined.is_empty() { "Push successful".into() } else { combined })
+        } else {
+            anyhow::bail!("{}", combined)
+        }
+    }
+
+    fn pull(&self) -> Result<String> {
+        let out = std::process::Command::new("git")
+            .args(["pull"])
+            .current_dir(&self.root)
+            .output()?;
+        let combined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr),
+        )
+        .trim()
+        .to_string();
+        if out.status.success() {
+            Ok(if combined.is_empty() { "Pull successful".into() } else { combined })
+        } else {
+            anyhow::bail!("{}", combined)
+        }
+    }
+
     fn log(&self, limit: usize) -> Result<Vec<CommitInfo>> {
         let mut walk = self.repo.revwalk()?;
         walk.push_head().ok(); // ok if no commits yet
