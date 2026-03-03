@@ -1,0 +1,27 @@
+#+title: rugit – Project Tasks
+
+* Tasks
+
+** TODO Scaffold Cargo project (Cargo.toml, directory layout)
+** TODO Backend trait and shared data model
+** TODO Git backend – read operations (status, log, diff, branches)
+** TODO Git backend – write operations (stage, unstage, discard, commit, stash)
+** TODO jj backend – subprocess stub
+** TODO Status buffer UI (staged / unstaged / untracked sections)
+** TODO Basic keybindings and event loop
+** TODO Config loading (~/.config/rugit/config.toml)
+** TODO Inline diff expansion in status buffer (Tab)
+** TODO Log buffer (=l= – commit graph, navigation)
+** TODO Diff viewer buffer (=d= on a commit or file)
+** TODO Commit message editor workflow (=c c=, =c a=, =c w=)
+** TODO Hunk-level staging
+** TODO Line-level staging
+** TODO Branch management popup (=b=)
+** TODO Stash popup (=z=)
+** TODO Rebase menu (=r=)
+** TODO Merge menu (=m=)
+** TODO Help popup (=?=)
+** TODO Interactive rebase UI
+** TODO jj backend – full implementation
+** TODO Colour themes (catppuccin, gruvbox, nord)
+** TODO Packaging (Homebrew formula, AUR PKGBUILD, Nix flake)
