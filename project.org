@@ -2,6 +2,43 @@
 
 * Tasks
 
+** TODO Line-level staging
+Stage/unstage individual lines within a hunk (visual selection or cursor-based). The UX model: expand a hunk, move cursor to a line, press =s= to stage just that line. Requires splitting hunks in the backend and applying partial patches.
+
+** TODO Branch management popup (=b=)
+Magit-style transient: =b b= checkout, =b c= create+checkout, =b d= delete, =b r= rename. Needs a branch list picker UI.
+
+** TODO Interactive rebase UI (=r i=)
+Show rebase todo list (pick/reword/edit/squash/fixup/drop per commit). Arrow keys to reorder, keybinds to change action. Drives =git rebase -i= via a custom sequence editor.
+
+** TODO Instant fixup/squash (=c F= / =c s=)
+Magit-style: pick a commit from a list, create a fixup or squash commit targeting it, optionally auto-rebase immediately.
+
+** TODO Diff viewer buffer (=d= on a commit or file)
+Full-screen diff view, navigable by hunk. Invoked from log buffer (=d= on selected commit) or status buffer (=d= on a file). Syntax-highlighted diff lines.
+
+** TODO Log buffer improvements
+Current log buffer is minimal. Add: commit graph rendering (=--graph=), author/date columns, filtering (=l f=), searching (=/=), pressing =Enter= to open diff viewer.
+
+** TODO Stash popup (=z=)
+=z z= stash, =z p= pop, =z a= apply, =z d= drop, =z l= list stashes. Needs stash list UI.
+
+** TODO Rebase/merge menus (=r=, =m=)
+=r r= rebase onto branch, =r e= rebase --continue, =r a= abort. =m m= merge, =m a= abort.
+
+** TODO Extended vim bindings in commit editor
+=o=/=O= open line below/above, =w=/=b=/=e= word motions, =G=/=gg= jump to end/start, =u=/=C-r= undo/redo, =yy=/=p=/=P= yank and paste line.
+
+** TODO Colour themes (catppuccin, gruvbox, nord)
+Theme enum in config.toml, palette lookup table, pass palette through render calls.
+
+** TODO jj backend – full implementation
+Implement all Backend trait methods using =jj= subprocess calls.
+
+** TODO Packaging (Homebrew formula, AUR PKGBUILD, Nix flake)
+
+* Done
+
 ** DONE Scaffold Cargo project (Cargo.toml, directory layout)
 ** DONE Backend trait and shared data model
 ** DONE Git backend – read operations (status, log, diff, branches)
@@ -14,24 +51,14 @@
 ** DONE Push (=P=) and pull (=F=) via subprocess
 ** DONE Recent commits section in status buffer
 ** DONE Commit amend (=c a=) – reopen editor with last commit message pre-filled, replace HEAD
-** DONE In-house commit message editor (TUI text area with basic Vim bindings: =i=, =Esc=, =:wq=) instead of deferring to =$EDITOR=
+** DONE In-house commit message editor (TUI text area with basic Vim bindings)
 ** DONE Push submenu (=P p= push, =P f= force-with-lease) – Magit-style transient
 ** DONE Vim Normal mode cursor movement in editor (=h j k l= / arrow keys)
 ** DONE Suppress TUI flash on push/pull (run inline, show Pushing… status)
 ** DONE Reorder status sections to match Magit (Untracked → Unstaged → Staged)
 ** DONE C-c C-c to save/quit inline editor (Emacs style)
-** TODO Log buffer (=l= – commit graph, navigation)
-** TODO Diff viewer buffer (=d= on a commit or file)
 ** DONE Hunk-level staging
 ** DONE Exhaustive footer bar (s/S, u/U, Tab, c, p, F, l, g, ?, q)
 ** DONE Unpushed commits section in status buffer
-** TODO Line-level staging
-** TODO Branch management popup (=b=)
-** TODO Stash popup (=z=)
-** TODO Rebase menu (=r=)
-** TODO Merge menu (=m=)
-** TODO Help popup (=?=)
-** TODO Interactive rebase UI
-** TODO jj backend – full implementation
-** TODO Colour themes (catppuccin, gruvbox, nord)
-** TODO Packaging (Homebrew formula, AUR PKGBUILD, Nix flake)
+** DONE Log buffer (=l=) with navigation
+** DONE Help popup (=?=)
