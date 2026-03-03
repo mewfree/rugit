@@ -56,7 +56,7 @@ cargo install rugit
 
 * Usage
 
-Run =rugit= (or =rg= for short) from anywhere inside a Git or Jujutsu repository:
+Run =rugit= from anywhere inside a Git or Jujutsu repository:
 
 #+begin_src sh
 rugit
