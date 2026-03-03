@@ -14,7 +14,7 @@
 ** DONE Push (=P=) and pull (=F=) via subprocess
 ** DONE Recent commits section in status buffer
 ** DONE Commit amend (=c a=) – reopen editor with last commit message pre-filled, replace HEAD
-** TODO In-house commit message editor (TUI text area with basic Vim bindings: =i=, =Esc=, =:wq=) instead of deferring to =$EDITOR=
+** DONE In-house commit message editor (TUI text area with basic Vim bindings: =i=, =Esc=, =:wq=) instead of deferring to =$EDITOR=
 ** TODO Log buffer (=l= – commit graph, navigation)
 ** TODO Diff viewer buffer (=d= on a commit or file)
 ** TODO Hunk-level staging

@@ -67,6 +67,18 @@ pub fn render_help(f: &mut Frame, area: Rect) {
             Span::raw("Show this help"),
         ]),
         Line::from(vec![
+            Span::styled("  P         ", Style::new().fg(Color::Cyan)),
+            Span::raw("Push"),
+        ]),
+        Line::from(vec![
+            Span::styled("  p         ", Style::new().fg(Color::Cyan)),
+            Span::raw("Force-push (--force-with-lease)"),
+        ]),
+        Line::from(vec![
+            Span::styled("  F         ", Style::new().fg(Color::Cyan)),
+            Span::raw("Pull / fetch"),
+        ]),
+        Line::from(vec![
             Span::styled("  Esc / q   ", Style::new().fg(Color::Cyan)),
             Span::raw("Quit / close help"),
         ]),

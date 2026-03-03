@@ -11,6 +11,51 @@ pub enum ActiveBuffer {
     Status,
     Log,
     Help,
+    Editor,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum EditorMode {
+    Normal,
+    Insert,
+}
+
+#[derive(Debug, Clone)]
+pub struct EditorState {
+    pub lines: Vec<String>,
+    pub cursor_row: usize,
+    pub cursor_col: usize,
+    pub mode: EditorMode,
+    pub title: String,
+    pub comments: Vec<String>,
+    pub pending_colon: bool,
+    pub is_amend: bool,
+}
+
+impl EditorState {
+    pub fn new(title: String, initial_message: String, comments: Vec<String>, is_amend: bool) -> Self {
+        let lines: Vec<String> = if initial_message.is_empty() {
+            vec![String::new()]
+        } else {
+            initial_message.lines().map(String::from).collect()
+        };
+        let col = lines[0].len();
+        Self {
+            cursor_row: 0,
+            cursor_col: col,
+            lines,
+            mode: EditorMode::Insert,
+            title,
+            comments,
+            pending_colon: false,
+            is_amend,
+        }
+    }
+
+    /// Returns the commit message (lines joined, trimmed).
+    pub fn message(&self) -> String {
+        self.lines.join("\n").trim().to_string()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -58,6 +103,7 @@ pub struct App {
     pub recent_commits: Vec<CommitInfo>,
     /// Flat list of visible status items (rebuilt on refresh)
     pub items: Vec<StatusItem>,
+    pub editor: Option<EditorState>,
 }
 
 impl App {
@@ -79,6 +125,7 @@ impl App {
             should_quit: false,
             recent_commits,
             items: Vec::new(),
+            editor: None,
         };
         app.rebuild_items();
         Ok(app)

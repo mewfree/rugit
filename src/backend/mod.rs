@@ -68,6 +68,7 @@ pub trait Backend {
     fn amend(&self, message: &str) -> Result<()>;
     fn log(&self, limit: usize) -> Result<Vec<CommitInfo>>;
     fn push(&self) -> Result<String>;
+    fn push_force_lease(&self) -> Result<String>;
     fn pull(&self) -> Result<String>;
 }
 

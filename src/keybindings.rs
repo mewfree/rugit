@@ -1,5 +1,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+use crate::app::EditorMode;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Action {
     Quit,
@@ -19,7 +21,16 @@ pub enum Action {
     CommitConfirm, // second 'c'
     CommitAmendConfirm, // 'a' after 'c'
     Push,
+    PushForce,
     Pull,
+    // Editor actions
+    EditorChar(char),
+    EditorBackspace,
+    EditorNewline,
+    EditorSave,
+    EditorAbort,
+    EditorInsertMode,
+    EditorNormalMode,
     None,
 }
 
@@ -60,7 +71,47 @@ pub fn key_to_action(key: KeyEvent, pending: Option<KeyCode>) -> Action {
         KeyCode::Esc => Action::HideHelp,
         KeyCode::Char('c') => Action::CommitBegin,
         KeyCode::Char('P') => Action::Push,
+        KeyCode::Char('p') => Action::PushForce,
         KeyCode::Char('F') => Action::Pull,
         _ => Action::None,
+    }
+}
+
+pub fn editor_key_to_action(key: KeyEvent, mode: &EditorMode, pending_colon: bool) -> Action {
+    // Ctrl-c always quits
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        if let KeyCode::Char('c') = key.code {
+            return Action::EditorAbort;
+        }
+    }
+
+    match mode {
+        EditorMode::Insert => match key.code {
+            KeyCode::Esc => Action::EditorNormalMode,
+            KeyCode::Backspace => Action::EditorBackspace,
+            KeyCode::Enter => Action::EditorNewline,
+            KeyCode::Char(c) => Action::EditorChar(c),
+            _ => Action::None,
+        },
+        EditorMode::Normal => {
+            if pending_colon {
+                // We already received ':', now waiting for 'w' then 'q'
+                match key.code {
+                    KeyCode::Char('w') => Action::None, // wait for 'q'
+                    KeyCode::Char('q') => Action::EditorSave,
+                    KeyCode::Esc => Action::EditorNormalMode, // clears pending_colon
+                    _ => Action::EditorNormalMode, // reset state
+                }
+            } else {
+                match key.code {
+                    KeyCode::Char('i') => Action::EditorInsertMode,
+                    KeyCode::Char('q') => Action::EditorAbort,
+                    KeyCode::Enter => Action::EditorSave,
+                    KeyCode::Char(':') => Action::EditorChar(':'), // handled via pending_colon in main
+                    KeyCode::Esc => Action::None,
+                    _ => Action::None,
+                }
+            }
+        }
     }
 }

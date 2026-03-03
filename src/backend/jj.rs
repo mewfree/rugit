@@ -122,6 +122,10 @@ impl Backend for JjBackend {
         Ok(if out.trim().is_empty() { "Push successful".into() } else { out.trim().to_string() })
     }
 
+    fn push_force_lease(&self) -> Result<String> {
+        anyhow::bail!("force-with-lease not supported for jj backend")
+    }
+
     fn pull(&self) -> Result<String> {
         let out = self.run_jj(&["git", "fetch"])?;
         Ok(if out.trim().is_empty() { "Fetch successful".into() } else { out.trim().to_string() })

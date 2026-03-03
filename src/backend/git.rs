@@ -285,6 +285,25 @@ impl Backend for GitBackend {
         }
     }
 
+    fn push_force_lease(&self) -> Result<String> {
+        let out = std::process::Command::new("git")
+            .args(["push", "--force-with-lease"])
+            .current_dir(&self.root)
+            .output()?;
+        let combined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr),
+        )
+        .trim()
+        .to_string();
+        if out.status.success() {
+            Ok(if combined.is_empty() { "Force-push successful".into() } else { combined })
+        } else {
+            anyhow::bail!("{}", combined)
+        }
+    }
+
     fn pull(&self) -> Result<String> {
         let out = std::process::Command::new("git")
             .args(["pull"])

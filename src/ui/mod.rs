@@ -1,6 +1,7 @@
 pub mod status;
 pub mod log;
 pub mod popup;
+pub mod editor;
 
 use ratatui::{
     layout::{Constraint, Layout},
@@ -47,6 +48,18 @@ pub fn render(f: &mut Frame, app: &mut App) {
             status::render_status(f, app, chunks[1]);
             popup::render_help(f, area);
         }
+        ActiveBuffer::Editor => {
+            if let Some(state) = &app.editor {
+                editor::render_editor(f, chunks[1], state);
+            } else {
+                status::render_status(f, app, chunks[1]);
+            }
+        }
+    }
+
+    // Remote op result popup (overlays everything)
+    if let Some((title, output)) = &app.remote_op_result.clone() {
+        popup::render_remote_result(f, area, title, output);
     }
 
     // Remote op result popup (overlays everything)

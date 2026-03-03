@@ -14,10 +14,10 @@ mod keybindings;
 mod backend;
 mod ui;
 
-use app::{ActiveBuffer, App};
+use app::{ActiveBuffer, App, EditorState};
 use backend::{detect_backend, BackendKind};
 use config::Config;
-use keybindings::{key_to_action, Action};
+use keybindings::{editor_key_to_action, key_to_action, Action};
 
 #[derive(Parser, Debug)]
 #[command(name = "rugit", about = "A Magit-inspired git TUI", version)]
@@ -82,6 +82,15 @@ fn run_app(
                     if matches!(key.code, KeyCode::Char('q') | KeyCode::Esc) {
                         app.remote_op_result = None;
                         app.status_msg = None;
+                    }
+                    continue;
+                }
+
+                // Route to inline editor if in editor mode
+                if app.buffer == ActiveBuffer::Editor {
+                    handle_editor_key(app, key);
+                    if app.should_quit {
+                        break;
                     }
                     continue;
                 }
@@ -174,13 +183,11 @@ fn run_app(
                     }
                     Action::CommitConfirm => {
                         app.pending_key = None;
-                        if let Err(e) = do_commit(terminal, app) {
-                            app.status_msg = Some(format!("Commit error: {}", e));
-                        }
+                        do_commit(app);
                     }
                     Action::CommitAmendConfirm => {
                         app.pending_key = None;
-                        if let Err(e) = do_commit_amend(terminal, app) {
+                        if let Err(e) = do_commit_amend(app) {
                             app.status_msg = Some(format!("Amend error: {}", e));
                         }
                     }
@@ -194,6 +201,20 @@ fn run_app(
                             Err(e) => {
                                 app.remote_op_result = Some(("Push Error".to_string(), e.to_string()));
                                 app.status_msg = Some("Push failed — press q to dismiss".to_string());
+                            }
+                        }
+                        let _ = app.refresh();
+                    }
+                    Action::PushForce => {
+                        app.pending_key = None;
+                        match do_git_remote_op(terminal, || app.backend.push_force_lease()) {
+                            Ok(msg) => {
+                                app.status_msg = Some("Force-push complete — press q to dismiss".to_string());
+                                app.remote_op_result = Some(("Force-Push Result".to_string(), msg));
+                            }
+                            Err(e) => {
+                                app.remote_op_result = Some(("Force-Push Error".to_string(), e.to_string()));
+                                app.status_msg = Some("Force-push failed — press q to dismiss".to_string());
                             }
                         }
                         let _ = app.refresh();
@@ -216,6 +237,14 @@ fn run_app(
                         // Clear pending key if it doesn't form a valid chord
                         app.pending_key = None;
                     }
+                    // Editor actions are handled by the editor subsystem, not here
+                    Action::EditorChar(_)
+                    | Action::EditorBackspace
+                    | Action::EditorNewline
+                    | Action::EditorSave
+                    | Action::EditorAbort
+                    | Action::EditorInsertMode
+                    | Action::EditorNormalMode => {}
                 }
 
                 if app.should_quit {
@@ -257,158 +286,162 @@ where
     result
 }
 
-fn do_commit(
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    app: &mut App,
-) -> Result<()> {
-    use std::io::Write as _;
-
-    // Build a temp file with diff summary comment
-    let tmp = std::env::temp_dir().join(format!("rugit_commit_{}.txt", std::process::id()));
-
-    // Get staged diff summary
-    let diff_summary = get_staged_summary(app);
-
-    {
-        let mut f = std::fs::File::create(&tmp)?;
-        writeln!(f, "")?;
-        writeln!(f, "# Enter commit message above.")?;
-        writeln!(f, "# Lines starting with # are ignored.")?;
-        writeln!(f, "#")?;
-        writeln!(f, "# Staged changes:")?;
-        for line in &diff_summary {
-            writeln!(f, "#   {}", line)?;
-        }
-    }
-
-    // Suspend TUI
-    disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture,
-    )?;
-    terminal.show_cursor()?;
-
-    // Launch editor
-    let editor = app.config.editor();
-    let status = std::process::Command::new(&editor)
-        .arg(&tmp)
-        .status()?;
-
-    // Restore TUI
-    enable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        EnterAlternateScreen,
-        EnableMouseCapture,
-    )?;
-    terminal.clear()?;
-
-    if !status.success() {
-        anyhow::bail!("Editor exited with non-zero status");
-    }
-
-    // Read the commit message
-    let content = std::fs::read_to_string(&tmp)?;
-    let _ = std::fs::remove_file(&tmp);
-
-    let message: String = content
-        .lines()
-        .filter(|l| !l.starts_with('#'))
-        .map(String::from)
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    let message = message.trim().to_string();
-
-    if message.is_empty() {
-        app.status_msg = Some("Commit aborted: empty message".to_string());
-        return Ok(());
-    }
-
-    app.backend.commit(&message)?;
-    app.refresh()?;
-    app.status_msg = Some("Commit created".to_string());
-
-    Ok(())
+/// Open the inline TUI commit editor for a new commit.
+fn do_commit(app: &mut App) {
+    let comments = get_staged_summary(app);
+    let mut comment_lines = vec![
+        "Enter commit message above.".to_string(),
+        "Lines starting with # are ignored.".to_string(),
+        String::new(),
+        "Staged changes:".to_string(),
+    ];
+    comment_lines.extend(comments.into_iter().map(|l| format!("  {}", l)));
+    app.editor = Some(EditorState::new(
+        "Commit Message".to_string(),
+        String::new(),
+        comment_lines,
+        false,
+    ));
+    app.buffer = ActiveBuffer::Editor;
 }
 
-fn do_commit_amend(
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    app: &mut App,
-) -> Result<()> {
-    use std::io::Write as _;
-
+/// Open the inline TUI commit editor for an amend.
+fn do_commit_amend(app: &mut App) -> Result<()> {
     let last_message = app.backend.log(1)?
         .into_iter()
         .next()
         .map(|c| c.summary)
         .unwrap_or_default();
 
-    let tmp = std::env::temp_dir().join(format!("rugit_amend_{}.txt", std::process::id()));
-
-    let diff_summary = get_staged_summary(app);
-
-    {
-        let mut f = std::fs::File::create(&tmp)?;
-        writeln!(f, "{}", last_message)?;
-        writeln!(f, "# Amend the commit message above.")?;
-        writeln!(f, "# Lines starting with # are ignored.")?;
-        writeln!(f, "#")?;
-        writeln!(f, "# Staged changes (will be included in amended commit):")?;
-        for line in &diff_summary {
-            writeln!(f, "#   {}", line)?;
-        }
-    }
-
-    disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture,
-    )?;
-    terminal.show_cursor()?;
-
-    let editor = app.config.editor();
-    let status = std::process::Command::new(&editor)
-        .arg(&tmp)
-        .status()?;
-
-    enable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        EnterAlternateScreen,
-        EnableMouseCapture,
-    )?;
-    terminal.clear()?;
-
-    if !status.success() {
-        anyhow::bail!("Editor exited with non-zero status");
-    }
-
-    let content = std::fs::read_to_string(&tmp)?;
-    let _ = std::fs::remove_file(&tmp);
-
-    let message: String = content
-        .lines()
-        .filter(|l| !l.starts_with('#'))
-        .map(String::from)
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    let message = message.trim().to_string();
-
-    if message.is_empty() {
-        app.status_msg = Some("Amend aborted: empty message".to_string());
-        return Ok(());
-    }
-
-    app.backend.amend(&message)?;
-    app.refresh()?;
-    app.status_msg = Some("Commit amended".to_string());
-
+    let comments = get_staged_summary(app);
+    let mut comment_lines = vec![
+        "Amend the commit message above.".to_string(),
+        "Lines starting with # are ignored.".to_string(),
+        String::new(),
+        "Staged changes (will be included in amended commit):".to_string(),
+    ];
+    comment_lines.extend(comments.into_iter().map(|l| format!("  {}", l)));
+    app.editor = Some(EditorState::new(
+        "Amend Commit".to_string(),
+        last_message,
+        comment_lines,
+        true,
+    ));
+    app.buffer = ActiveBuffer::Editor;
     Ok(())
+}
+
+/// Handle a keypress when the inline editor buffer is active.
+fn handle_editor_key(app: &mut App, key: crossterm::event::KeyEvent) {
+    use app::EditorMode;
+
+    let action = {
+        let state = match app.editor.as_ref() {
+            Some(s) => s,
+            None => return,
+        };
+        editor_key_to_action(key, &state.mode, state.pending_colon)
+    };
+
+    match action {
+        Action::EditorInsertMode => {
+            if let Some(state) = app.editor.as_mut() {
+                state.mode = EditorMode::Insert;
+                state.pending_colon = false;
+            }
+        }
+        Action::EditorNormalMode => {
+            if let Some(state) = app.editor.as_mut() {
+                state.mode = EditorMode::Normal;
+                state.pending_colon = false;
+            }
+        }
+        Action::EditorChar(c) => {
+            if let Some(state) = app.editor.as_mut() {
+                if state.mode == EditorMode::Normal && c == ':' {
+                    state.pending_colon = true;
+                } else {
+                    // In insert mode, insert the character at the cursor
+                    let row = state.cursor_row;
+                    let col = state.cursor_col;
+                    state.lines[row].insert(col, c);
+                    state.cursor_col += 1;
+                    state.pending_colon = false;
+                }
+            }
+        }
+        Action::EditorBackspace => {
+            if let Some(state) = app.editor.as_mut() {
+                let row = state.cursor_row;
+                let col = state.cursor_col;
+                if col > 0 {
+                    state.lines[row].remove(col - 1);
+                    state.cursor_col -= 1;
+                } else if row > 0 {
+                    // Join with previous line
+                    let current_line = state.lines.remove(row);
+                    let prev_len = state.lines[row - 1].len();
+                    state.lines[row - 1].push_str(&current_line);
+                    state.cursor_row -= 1;
+                    state.cursor_col = prev_len;
+                }
+            }
+        }
+        Action::EditorNewline => {
+            if let Some(state) = app.editor.as_mut() {
+                let row = state.cursor_row;
+                let col = state.cursor_col;
+                let rest = state.lines[row].split_off(col);
+                state.lines.insert(row + 1, rest);
+                state.cursor_row += 1;
+                state.cursor_col = 0;
+            }
+        }
+        Action::EditorSave => {
+            let (message, is_amend) = match app.editor.as_ref() {
+                Some(state) => (state.message(), state.is_amend),
+                None => return,
+            };
+
+            app.editor = None;
+            app.buffer = ActiveBuffer::Status;
+
+            if message.is_empty() {
+                app.status_msg = Some(if is_amend {
+                    "Amend aborted: empty message".to_string()
+                } else {
+                    "Commit aborted: empty message".to_string()
+                });
+                return;
+            }
+
+            let result = if is_amend {
+                app.backend.amend(&message)
+            } else {
+                app.backend.commit(&message)
+            };
+
+            match result {
+                Ok(_) => {
+                    let _ = app.refresh();
+                    app.status_msg = Some(if is_amend {
+                        "Commit amended".to_string()
+                    } else {
+                        "Commit created".to_string()
+                    });
+                }
+                Err(e) => {
+                    app.status_msg = Some(format!("Error: {}", e));
+                }
+            }
+        }
+        Action::EditorAbort => {
+            app.editor = None;
+            app.buffer = ActiveBuffer::Status;
+            app.status_msg = Some("Commit aborted".to_string());
+        }
+        _ => {}
+    }
 }
 
 fn get_staged_summary(app: &App) -> Vec<String> {
