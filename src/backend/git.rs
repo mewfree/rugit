@@ -233,6 +233,38 @@ impl Backend for GitBackend {
         Ok(())
     }
 
+    fn amend(&self, msg: &str) -> Result<()> {
+        let sig = self.repo.signature()?;
+        let head_commit = self.repo.head()?.peel_to_commit()?;
+
+        let has_staged = self.repo.statuses(None)?.iter().any(|e| {
+            let s = e.status();
+            s.contains(git2::Status::INDEX_NEW)
+                || s.contains(git2::Status::INDEX_MODIFIED)
+                || s.contains(git2::Status::INDEX_DELETED)
+                || s.contains(git2::Status::INDEX_RENAMED)
+        });
+
+        let tree = if has_staged {
+            let mut index = self.repo.index()?;
+            let tree_id = index.write_tree()?;
+            self.repo.find_tree(tree_id)?
+        } else {
+            head_commit.tree()?
+        };
+
+        head_commit.amend(
+            Some("HEAD"),
+            Some(&sig),
+            Some(&sig),
+            None,
+            Some(msg),
+            Some(&tree),
+        )?;
+
+        Ok(())
+    }
+
     fn push(&self) -> Result<String> {
         let out = std::process::Command::new("git")
             .args(["push"])

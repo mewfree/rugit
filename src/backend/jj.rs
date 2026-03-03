@@ -113,6 +113,10 @@ impl Backend for JjBackend {
         bail!("jj write ops not yet implemented")
     }
 
+    fn amend(&self, _message: &str) -> Result<()> {
+        bail!("amend not supported for jj backend")
+    }
+
     fn push(&self) -> Result<String> {
         let out = self.run_jj(&["git", "push"])?;
         Ok(if out.trim().is_empty() { "Push successful".into() } else { out.trim().to_string() })

@@ -2,7 +2,7 @@ use std::io;
 use anyhow::Result;
 use clap::Parser;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -74,6 +74,15 @@ fn run_app(
             if let Event::Key(key) = event::read()? {
                 // Only process key press events (ignore release/repeat on some platforms)
                 if key.kind != KeyEventKind::Press {
+                    continue;
+                }
+
+                // Dismiss remote op result popup on q or Esc
+                if app.remote_op_result.is_some() {
+                    if matches!(key.code, KeyCode::Char('q') | KeyCode::Esc) {
+                        app.remote_op_result = None;
+                        app.status_msg = None;
+                    }
                     continue;
                 }
 
@@ -171,21 +180,35 @@ fn run_app(
                     }
                     Action::CommitAmendConfirm => {
                         app.pending_key = None;
-                        app.status_msg = Some("Amend not yet implemented".to_string());
+                        if let Err(e) = do_commit_amend(terminal, app) {
+                            app.status_msg = Some(format!("Amend error: {}", e));
+                        }
                     }
                     Action::Push => {
                         app.pending_key = None;
                         match do_git_remote_op(terminal, || app.backend.push()) {
-                            Ok(msg) => app.status_msg = Some(msg),
-                            Err(e) => app.status_msg = Some(format!("Push error: {}", e)),
+                            Ok(msg) => {
+                                app.status_msg = Some("Push complete — press q to dismiss".to_string());
+                                app.remote_op_result = Some(("Push Result".to_string(), msg));
+                            }
+                            Err(e) => {
+                                app.remote_op_result = Some(("Push Error".to_string(), e.to_string()));
+                                app.status_msg = Some("Push failed — press q to dismiss".to_string());
+                            }
                         }
                         let _ = app.refresh();
                     }
                     Action::Pull => {
                         app.pending_key = None;
                         match do_git_remote_op(terminal, || app.backend.pull()) {
-                            Ok(msg) => app.status_msg = Some(msg),
-                            Err(e) => app.status_msg = Some(format!("Pull error: {}", e)),
+                            Ok(msg) => {
+                                app.status_msg = Some("Pull complete — press q to dismiss".to_string());
+                                app.remote_op_result = Some(("Pull Result".to_string(), msg));
+                            }
+                            Err(e) => {
+                                app.remote_op_result = Some(("Pull Error".to_string(), e.to_string()));
+                                app.status_msg = Some("Pull failed — press q to dismiss".to_string());
+                            }
                         }
                         let _ = app.refresh();
                     }
@@ -307,6 +330,83 @@ fn do_commit(
     app.backend.commit(&message)?;
     app.refresh()?;
     app.status_msg = Some("Commit created".to_string());
+
+    Ok(())
+}
+
+fn do_commit_amend(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    app: &mut App,
+) -> Result<()> {
+    use std::io::Write as _;
+
+    let last_message = app.backend.log(1)?
+        .into_iter()
+        .next()
+        .map(|c| c.summary)
+        .unwrap_or_default();
+
+    let tmp = std::env::temp_dir().join(format!("rugit_amend_{}.txt", std::process::id()));
+
+    let diff_summary = get_staged_summary(app);
+
+    {
+        let mut f = std::fs::File::create(&tmp)?;
+        writeln!(f, "{}", last_message)?;
+        writeln!(f, "# Amend the commit message above.")?;
+        writeln!(f, "# Lines starting with # are ignored.")?;
+        writeln!(f, "#")?;
+        writeln!(f, "# Staged changes (will be included in amended commit):")?;
+        for line in &diff_summary {
+            writeln!(f, "#   {}", line)?;
+        }
+    }
+
+    disable_raw_mode()?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture,
+    )?;
+    terminal.show_cursor()?;
+
+    let editor = app.config.editor();
+    let status = std::process::Command::new(&editor)
+        .arg(&tmp)
+        .status()?;
+
+    enable_raw_mode()?;
+    execute!(
+        terminal.backend_mut(),
+        EnterAlternateScreen,
+        EnableMouseCapture,
+    )?;
+    terminal.clear()?;
+
+    if !status.success() {
+        anyhow::bail!("Editor exited with non-zero status");
+    }
+
+    let content = std::fs::read_to_string(&tmp)?;
+    let _ = std::fs::remove_file(&tmp);
+
+    let message: String = content
+        .lines()
+        .filter(|l| !l.starts_with('#'))
+        .map(String::from)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let message = message.trim().to_string();
+
+    if message.is_empty() {
+        app.status_msg = Some("Amend aborted: empty message".to_string());
+        return Ok(());
+    }
+
+    app.backend.amend(&message)?;
+    app.refresh()?;
+    app.status_msg = Some("Commit amended".to_string());
 
     Ok(())
 }

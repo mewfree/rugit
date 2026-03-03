@@ -2,18 +2,21 @@
 
 * Tasks
 
-** TODO Scaffold Cargo project (Cargo.toml, directory layout)
-** TODO Backend trait and shared data model
-** TODO Git backend – read operations (status, log, diff, branches)
-** TODO Git backend – write operations (stage, unstage, discard, commit, stash)
-** TODO jj backend – subprocess stub
-** TODO Status buffer UI (staged / unstaged / untracked sections)
-** TODO Basic keybindings and event loop
-** TODO Config loading (~/.config/rugit/config.toml)
-** TODO Inline diff expansion in status buffer (Tab)
+** DONE Scaffold Cargo project (Cargo.toml, directory layout)
+** DONE Backend trait and shared data model
+** DONE Git backend – read operations (status, log, diff, branches)
+** DONE Git backend – write operations (stage, unstage, discard, commit, stash)
+** DONE jj backend – subprocess stub
+** DONE Status buffer UI (staged / unstaged / untracked sections, spacing, colours)
+** DONE Basic keybindings and event loop
+** DONE Config loading (~/.config/rugit/config.toml)
+** DONE Inline diff expansion in status buffer (Tab toggle)
+** DONE Push (=P=) and pull (=F=) via subprocess
+** DONE Recent commits section in status buffer
+** DONE Commit amend (=c a=) – reopen editor with last commit message pre-filled, replace HEAD
+** TODO In-house commit message editor (TUI text area with basic Vim bindings: =i=, =Esc=, =:wq=) instead of deferring to =$EDITOR=
 ** TODO Log buffer (=l= – commit graph, navigation)
 ** TODO Diff viewer buffer (=d= on a commit or file)
-** TODO Commit message editor workflow (=c c=, =c a=, =c w=)
 ** TODO Hunk-level staging
 ** TODO Line-level staging
 ** TODO Branch management popup (=b=)

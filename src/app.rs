@@ -32,8 +32,8 @@ pub enum StatusItem {
         section: Section,
         is_expanded: bool,
     },
-    Diff {
-        lines: Vec<String>,
+    DiffLine {
+        line: String,
     },
     RecentHeader,
     RecentCommit {
@@ -53,6 +53,7 @@ pub struct App {
     pub diff_cache: HashMap<String, String>,
     pub pending_key: Option<KeyCode>,
     pub status_msg: Option<String>,
+    pub remote_op_result: Option<(String, String)>, // (title, output)
     pub should_quit: bool,
     pub recent_commits: Vec<CommitInfo>,
     /// Flat list of visible status items (rebuilt on refresh)
@@ -74,6 +75,7 @@ impl App {
             diff_cache: HashMap::new(),
             pending_key: None,
             status_msg: None,
+            remote_op_result: None,
             should_quit: false,
             recent_commits,
             items: Vec::new(),
@@ -104,8 +106,9 @@ impl App {
                 });
                 if is_expanded {
                     if let Some(diff) = self.diff_cache.get(&format!("staged:{}", path)) {
-                        let lines: Vec<String> = diff.lines().map(String::from).collect();
-                        items.push(StatusItem::Diff { lines });
+                        for line in diff.lines() {
+                            items.push(StatusItem::DiffLine { line: line.to_string() });
+                        }
                     }
                 }
             }
@@ -113,7 +116,7 @@ impl App {
 
         // Unstaged section
         if !self.status.unstaged.is_empty() {
-            if !items.is_empty() { items.push(StatusItem::Spacer); }
+            if items.len() > 1 { items.push(StatusItem::Spacer); }
             items.push(StatusItem::Header {
                 label: "Unstaged Changes".to_string(),
                 count: self.status.unstaged.len(),
@@ -130,8 +133,9 @@ impl App {
                 });
                 if is_expanded {
                     if let Some(diff) = self.diff_cache.get(&format!("unstaged:{}", path)) {
-                        let lines: Vec<String> = diff.lines().map(String::from).collect();
-                        items.push(StatusItem::Diff { lines });
+                        for line in diff.lines() {
+                            items.push(StatusItem::DiffLine { line: line.to_string() });
+                        }
                     }
                 }
             }
@@ -139,7 +143,7 @@ impl App {
 
         // Untracked section
         if !self.status.untracked.is_empty() {
-            if !items.is_empty() { items.push(StatusItem::Spacer); }
+            if items.len() > 1 { items.push(StatusItem::Spacer); }
             items.push(StatusItem::Header {
                 label: "Untracked Files".to_string(),
                 count: self.status.untracked.len(),
@@ -156,7 +160,7 @@ impl App {
 
         // Recent commits section
         if !self.recent_commits.is_empty() {
-            if !items.is_empty() { items.push(StatusItem::Spacer); }
+            if items.len() > 1 { items.push(StatusItem::Spacer); }
             items.push(StatusItem::RecentHeader);
             for info in &self.recent_commits {
                 items.push(StatusItem::RecentCommit { info: info.clone() });
@@ -179,8 +183,16 @@ impl App {
 
     pub fn move_down(&mut self) {
         if self.buffer == ActiveBuffer::Status {
-            if !self.items.is_empty() && self.cursor + 1 < self.items.len() {
-                self.cursor += 1;
+            let mut next = self.cursor + 1;
+            while next < self.items.len() {
+                if matches!(self.items[next], StatusItem::DiffLine { .. }) {
+                    next += 1;
+                } else {
+                    break;
+                }
+            }
+            if next < self.items.len() {
+                self.cursor = next;
             }
         } else if self.buffer == ActiveBuffer::Log {
             if !self.log.is_empty() && self.cursor + 1 < self.log.len() {
@@ -190,8 +202,15 @@ impl App {
     }
 
     pub fn move_up(&mut self) {
-        if self.cursor > 0 {
-            self.cursor -= 1;
+        if self.buffer == ActiveBuffer::Status {
+            if self.cursor == 0 { return; }
+            let mut prev = self.cursor - 1;
+            while prev > 0 && matches!(self.items[prev], StatusItem::DiffLine { .. }) {
+                prev -= 1;
+            }
+            self.cursor = prev;
+        } else {
+            if self.cursor > 0 { self.cursor -= 1; }
         }
     }
 
@@ -288,19 +307,6 @@ impl App {
                     self.expanded.insert(key);
                 }
                 self.rebuild_items();
-            }
-            StatusItem::Diff { .. } => {
-                // Collapse the parent File item sitting directly above this Diff
-                if self.cursor > 0 {
-                    if let Some(StatusItem::File { entry, section, .. }) =
-                        self.items.get(self.cursor - 1).cloned()
-                    {
-                        let key = self.file_key(&section, &entry.path);
-                        self.expanded.remove(&key);
-                        self.cursor -= 1;
-                        self.rebuild_items();
-                    }
-                }
             }
             _ => {}
         }
