@@ -191,9 +191,15 @@ fn run_app(
                             app.status_msg = Some(format!("Amend error: {}", e));
                         }
                     }
+                    Action::PushBegin => {
+                        app.pending_key = Some(crossterm::event::KeyCode::Char('P'));
+                        app.status_msg = Some("P-".to_string());
+                    }
                     Action::Push => {
                         app.pending_key = None;
-                        match do_git_remote_op(terminal, || app.backend.push()) {
+                        app.status_msg = Some("Pushing…".to_string());
+                        terminal.draw(|f| ui::render(f, app))?;
+                        match app.backend.push() {
                             Ok(msg) => {
                                 app.status_msg = Some("Push complete — press q to dismiss".to_string());
                                 app.remote_op_result = Some(("Push Result".to_string(), msg));
@@ -207,7 +213,9 @@ fn run_app(
                     }
                     Action::PushForce => {
                         app.pending_key = None;
-                        match do_git_remote_op(terminal, || app.backend.push_force_lease()) {
+                        app.status_msg = Some("Force-pushing…".to_string());
+                        terminal.draw(|f| ui::render(f, app))?;
+                        match app.backend.push_force_lease() {
                             Ok(msg) => {
                                 app.status_msg = Some("Force-push complete — press q to dismiss".to_string());
                                 app.remote_op_result = Some(("Force-Push Result".to_string(), msg));
@@ -221,7 +229,9 @@ fn run_app(
                     }
                     Action::Pull => {
                         app.pending_key = None;
-                        match do_git_remote_op(terminal, || app.backend.pull()) {
+                        app.status_msg = Some("Pulling…".to_string());
+                        terminal.draw(|f| ui::render(f, app))?;
+                        match app.backend.pull() {
                             Ok(msg) => {
                                 app.status_msg = Some("Pull complete — press q to dismiss".to_string());
                                 app.remote_op_result = Some(("Pull Result".to_string(), msg));
@@ -244,7 +254,11 @@ fn run_app(
                     | Action::EditorSave
                     | Action::EditorAbort
                     | Action::EditorInsertMode
-                    | Action::EditorNormalMode => {}
+                    | Action::EditorNormalMode
+                    | Action::EditorMoveLeft
+                    | Action::EditorMoveRight
+                    | Action::EditorMoveUp
+                    | Action::EditorMoveDown => {}
                 }
 
                 if app.should_quit {
@@ -254,36 +268,6 @@ fn run_app(
         }
     }
     Ok(())
-}
-
-/// Suspend the TUI, run a closure (which may print to stdout/stderr or prompt
-/// for credentials), then restore the TUI.  Returns the closure's Result.
-fn do_git_remote_op<F>(
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    f: F,
-) -> Result<String>
-where
-    F: FnOnce() -> Result<String>,
-{
-    disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture,
-    )?;
-    terminal.show_cursor()?;
-
-    let result = f();
-
-    enable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        EnterAlternateScreen,
-        EnableMouseCapture,
-    )?;
-    terminal.clear()?;
-
-    result
 }
 
 /// Open the inline TUI commit editor for a new commit.
@@ -334,6 +318,30 @@ fn do_commit_amend(app: &mut App) -> Result<()> {
 /// Handle a keypress when the inline editor buffer is active.
 fn handle_editor_key(app: &mut App, key: crossterm::event::KeyEvent) {
     use app::EditorMode;
+    use crossterm::event::KeyModifiers;
+
+    // Ctrl-C Ctrl-C (Emacs-style): first press arms, second press saves.
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        if let crossterm::event::KeyCode::Char('c') = key.code {
+            if let Some(state) = app.editor.as_mut() {
+                if state.pending_ctrl_c {
+                    // Second C-c: save/commit
+                    state.pending_ctrl_c = false;
+                } else {
+                    state.pending_ctrl_c = true;
+                    return;
+                }
+            }
+            // Fall through to EditorSave logic below
+            editor_do_save(app);
+            return;
+        }
+    }
+
+    // Clear pending_ctrl_c on any other key
+    if let Some(state) = app.editor.as_mut() {
+        state.pending_ctrl_c = false;
+    }
 
     let action = {
         let state = match app.editor.as_ref() {
@@ -361,7 +369,6 @@ fn handle_editor_key(app: &mut App, key: crossterm::event::KeyEvent) {
                 if state.mode == EditorMode::Normal && c == ':' {
                     state.pending_colon = true;
                 } else {
-                    // In insert mode, insert the character at the cursor
                     let row = state.cursor_row;
                     let col = state.cursor_col;
                     state.lines[row].insert(col, c);
@@ -378,7 +385,6 @@ fn handle_editor_key(app: &mut App, key: crossterm::event::KeyEvent) {
                     state.lines[row].remove(col - 1);
                     state.cursor_col -= 1;
                 } else if row > 0 {
-                    // Join with previous line
                     let current_line = state.lines.remove(row);
                     let prev_len = state.lines[row - 1].len();
                     state.lines[row - 1].push_str(&current_line);
@@ -397,43 +403,41 @@ fn handle_editor_key(app: &mut App, key: crossterm::event::KeyEvent) {
                 state.cursor_col = 0;
             }
         }
+        Action::EditorMoveLeft => {
+            if let Some(state) = app.editor.as_mut() {
+                if state.cursor_col > 0 {
+                    state.cursor_col -= 1;
+                }
+            }
+        }
+        Action::EditorMoveRight => {
+            if let Some(state) = app.editor.as_mut() {
+                let line_len = state.lines[state.cursor_row].len();
+                if state.cursor_col < line_len {
+                    state.cursor_col += 1;
+                }
+            }
+        }
+        Action::EditorMoveUp => {
+            if let Some(state) = app.editor.as_mut() {
+                if state.cursor_row > 0 {
+                    state.cursor_row -= 1;
+                    let line_len = state.lines[state.cursor_row].len();
+                    state.cursor_col = state.cursor_col.min(line_len);
+                }
+            }
+        }
+        Action::EditorMoveDown => {
+            if let Some(state) = app.editor.as_mut() {
+                if state.cursor_row + 1 < state.lines.len() {
+                    state.cursor_row += 1;
+                    let line_len = state.lines[state.cursor_row].len();
+                    state.cursor_col = state.cursor_col.min(line_len);
+                }
+            }
+        }
         Action::EditorSave => {
-            let (message, is_amend) = match app.editor.as_ref() {
-                Some(state) => (state.message(), state.is_amend),
-                None => return,
-            };
-
-            app.editor = None;
-            app.buffer = ActiveBuffer::Status;
-
-            if message.is_empty() {
-                app.status_msg = Some(if is_amend {
-                    "Amend aborted: empty message".to_string()
-                } else {
-                    "Commit aborted: empty message".to_string()
-                });
-                return;
-            }
-
-            let result = if is_amend {
-                app.backend.amend(&message)
-            } else {
-                app.backend.commit(&message)
-            };
-
-            match result {
-                Ok(_) => {
-                    let _ = app.refresh();
-                    app.status_msg = Some(if is_amend {
-                        "Commit amended".to_string()
-                    } else {
-                        "Commit created".to_string()
-                    });
-                }
-                Err(e) => {
-                    app.status_msg = Some(format!("Error: {}", e));
-                }
-            }
+            editor_do_save(app);
         }
         Action::EditorAbort => {
             app.editor = None;
@@ -441,6 +445,45 @@ fn handle_editor_key(app: &mut App, key: crossterm::event::KeyEvent) {
             app.status_msg = Some("Commit aborted".to_string());
         }
         _ => {}
+    }
+}
+
+fn editor_do_save(app: &mut App) {
+    let (message, is_amend) = match app.editor.as_ref() {
+        Some(state) => (state.message(), state.is_amend),
+        None => return,
+    };
+
+    app.editor = None;
+    app.buffer = ActiveBuffer::Status;
+
+    if message.is_empty() {
+        app.status_msg = Some(if is_amend {
+            "Amend aborted: empty message".to_string()
+        } else {
+            "Commit aborted: empty message".to_string()
+        });
+        return;
+    }
+
+    let result = if is_amend {
+        app.backend.amend(&message)
+    } else {
+        app.backend.commit(&message)
+    };
+
+    match result {
+        Ok(_) => {
+            let _ = app.refresh();
+            app.status_msg = Some(if is_amend {
+                "Commit amended".to_string()
+            } else {
+                "Commit created".to_string()
+            });
+        }
+        Err(e) => {
+            app.status_msg = Some(format!("Error: {}", e));
+        }
     }
 }
 

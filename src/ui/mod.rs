@@ -12,6 +12,7 @@ use ratatui::{
 };
 
 use crate::app::{ActiveBuffer, App};
+use crossterm::event::KeyCode;
 
 pub fn render(f: &mut Frame, app: &mut App) {
     let area = f.area();
@@ -57,9 +58,9 @@ pub fn render(f: &mut Frame, app: &mut App) {
         }
     }
 
-    // Remote op result popup (overlays everything)
-    if let Some((title, output)) = &app.remote_op_result.clone() {
-        popup::render_remote_result(f, area, title, output);
+    // Push submenu popup
+    if app.pending_key == Some(KeyCode::Char('P')) {
+        popup::render_push_popup(f, area);
     }
 
     // Remote op result popup (overlays everything)

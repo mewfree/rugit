@@ -68,11 +68,7 @@ pub fn render_help(f: &mut Frame, area: Rect) {
         ]),
         Line::from(vec![
             Span::styled("  P         ", Style::new().fg(Color::Cyan)),
-            Span::raw("Push"),
-        ]),
-        Line::from(vec![
-            Span::styled("  p         ", Style::new().fg(Color::Cyan)),
-            Span::raw("Force-push (--force-with-lease)"),
+            Span::raw("Push menu (P p: push  P f: force-push)"),
         ]),
         Line::from(vec![
             Span::styled("  F         ", Style::new().fg(Color::Cyan)),
@@ -91,6 +87,40 @@ pub fn render_help(f: &mut Frame, area: Rect) {
                 .title_alignment(Alignment::Center)
                 .borders(Borders::ALL)
                 .border_style(Style::new().fg(Color::Yellow)),
+        )
+        .alignment(Alignment::Left);
+
+    f.render_widget(paragraph, popup_area);
+}
+
+pub fn render_push_popup(f: &mut Frame, area: Rect) {
+    let popup_area = centered_rect(50, 30, area);
+    f.render_widget(Clear, popup_area);
+
+    let lines = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  p  ", Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::raw("Push"),
+        ]),
+        Line::from(vec![
+            Span::styled("  f  ", Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::raw("Force push (--force-with-lease)"),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Esc / any other key: cancel",
+            Style::new().fg(Color::DarkGray),
+        )),
+    ];
+
+    let paragraph = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title(" Push ")
+                .title_alignment(Alignment::Center)
+                .borders(Borders::ALL)
+                .border_style(Style::new().fg(Color::Cyan)),
         )
         .alignment(Alignment::Left);
 

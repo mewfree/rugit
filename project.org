@@ -15,6 +15,11 @@
 ** DONE Recent commits section in status buffer
 ** DONE Commit amend (=c a=) – reopen editor with last commit message pre-filled, replace HEAD
 ** DONE In-house commit message editor (TUI text area with basic Vim bindings: =i=, =Esc=, =:wq=) instead of deferring to =$EDITOR=
+** DONE Push submenu (=P p= push, =P f= force-with-lease) – Magit-style transient
+** DONE Vim Normal mode cursor movement in editor (=h j k l= / arrow keys)
+** DONE Suppress TUI flash on push/pull (run inline, show Pushing… status)
+** DONE Reorder status sections to match Magit (Untracked → Unstaged → Staged)
+** DONE C-c C-c to save/quit inline editor (Emacs style)
 ** TODO Log buffer (=l= – commit graph, navigation)
 ** TODO Diff viewer buffer (=d= on a commit or file)
 ** TODO Hunk-level staging

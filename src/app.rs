@@ -29,6 +29,7 @@ pub struct EditorState {
     pub title: String,
     pub comments: Vec<String>,
     pub pending_colon: bool,
+    pub pending_ctrl_c: bool,
     pub is_amend: bool,
 }
 
@@ -48,6 +49,7 @@ impl EditorState {
             title,
             comments,
             pending_colon: false,
+            pending_ctrl_c: false,
             is_amend,
         }
     }
@@ -132,36 +134,27 @@ impl App {
     }
 
     /// Rebuild the flat items list from current status + expanded set.
+    /// Section order matches Magit: Untracked → Unstaged → Staged.
     pub fn rebuild_items(&mut self) {
         let mut items = vec![StatusItem::Spacer];
 
-        // Staged section
-        if !self.status.staged.is_empty() {
+        // Untracked section (top)
+        if !self.status.untracked.is_empty() {
             items.push(StatusItem::Header {
-                label: "Staged Changes".to_string(),
-                count: self.status.staged.len(),
-                section: Section::Staged,
+                label: "Untracked Files".to_string(),
+                count: self.status.untracked.len(),
+                section: Section::Untracked,
             });
-            for entry in &self.status.staged {
-                let path = entry.path.clone();
-                let key = format!("staged:{}", path);
-                let is_expanded = self.expanded.contains(&key);
+            for entry in &self.status.untracked {
                 items.push(StatusItem::File {
                     entry: entry.clone(),
-                    section: Section::Staged,
-                    is_expanded,
+                    section: Section::Untracked,
+                    is_expanded: false,
                 });
-                if is_expanded {
-                    if let Some(diff) = self.diff_cache.get(&format!("staged:{}", path)) {
-                        for line in diff.lines() {
-                            items.push(StatusItem::DiffLine { line: line.to_string() });
-                        }
-                    }
-                }
             }
         }
 
-        // Unstaged section
+        // Unstaged section (middle)
         if !self.status.unstaged.is_empty() {
             if items.len() > 1 { items.push(StatusItem::Spacer); }
             items.push(StatusItem::Header {
@@ -188,20 +181,30 @@ impl App {
             }
         }
 
-        // Untracked section
-        if !self.status.untracked.is_empty() {
+        // Staged section (bottom)
+        if !self.status.staged.is_empty() {
             if items.len() > 1 { items.push(StatusItem::Spacer); }
             items.push(StatusItem::Header {
-                label: "Untracked Files".to_string(),
-                count: self.status.untracked.len(),
-                section: Section::Untracked,
+                label: "Staged Changes".to_string(),
+                count: self.status.staged.len(),
+                section: Section::Staged,
             });
-            for entry in &self.status.untracked {
+            for entry in &self.status.staged {
+                let path = entry.path.clone();
+                let key = format!("staged:{}", path);
+                let is_expanded = self.expanded.contains(&key);
                 items.push(StatusItem::File {
                     entry: entry.clone(),
-                    section: Section::Untracked,
-                    is_expanded: false,
+                    section: Section::Staged,
+                    is_expanded,
                 });
+                if is_expanded {
+                    if let Some(diff) = self.diff_cache.get(&format!("staged:{}", path)) {
+                        for line in diff.lines() {
+                            items.push(StatusItem::DiffLine { line: line.to_string() });
+                        }
+                    }
+                }
             }
         }
 

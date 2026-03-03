@@ -20,8 +20,9 @@ pub enum Action {
     CommitBegin,  // first 'c' of 'c c'
     CommitConfirm, // second 'c'
     CommitAmendConfirm, // 'a' after 'c'
-    Push,
-    PushForce,
+    PushBegin,    // 'P' — opens push submenu
+    Push,         // 'P p'
+    PushForce,    // 'P f'
     Pull,
     // Editor actions
     EditorChar(char),
@@ -31,6 +32,10 @@ pub enum Action {
     EditorAbort,
     EditorInsertMode,
     EditorNormalMode,
+    EditorMoveLeft,
+    EditorMoveRight,
+    EditorMoveUp,
+    EditorMoveDown,
     None,
 }
 
@@ -49,6 +54,11 @@ pub fn key_to_action(key: KeyEvent, pending: Option<KeyCode>) -> Action {
             KeyCode::Char('c') => match key.code {
                 KeyCode::Char('c') => return Action::CommitConfirm,
                 KeyCode::Char('a') => return Action::CommitAmendConfirm,
+                _ => return Action::None,
+            },
+            KeyCode::Char('P') => match key.code {
+                KeyCode::Char('p') => return Action::Push,
+                KeyCode::Char('f') => return Action::PushForce,
                 _ => return Action::None,
             },
             _ => {}
@@ -70,19 +80,16 @@ pub fn key_to_action(key: KeyEvent, pending: Option<KeyCode>) -> Action {
         KeyCode::Char('?') => Action::ShowHelp,
         KeyCode::Esc => Action::HideHelp,
         KeyCode::Char('c') => Action::CommitBegin,
-        KeyCode::Char('P') => Action::Push,
-        KeyCode::Char('p') => Action::PushForce,
+        KeyCode::Char('P') => Action::PushBegin,
         KeyCode::Char('F') => Action::Pull,
         _ => Action::None,
     }
 }
 
 pub fn editor_key_to_action(key: KeyEvent, mode: &EditorMode, pending_colon: bool) -> Action {
-    // Ctrl-c always quits
+    // Ctrl-C is handled by the caller (pending_ctrl_c logic for C-c C-c save).
     if key.modifiers.contains(KeyModifiers::CONTROL) {
-        if let KeyCode::Char('c') = key.code {
-            return Action::EditorAbort;
-        }
+        return Action::None;
     }
 
     match mode {
@@ -95,19 +102,22 @@ pub fn editor_key_to_action(key: KeyEvent, mode: &EditorMode, pending_colon: boo
         },
         EditorMode::Normal => {
             if pending_colon {
-                // We already received ':', now waiting for 'w' then 'q'
                 match key.code {
                     KeyCode::Char('w') => Action::None, // wait for 'q'
                     KeyCode::Char('q') => Action::EditorSave,
-                    KeyCode::Esc => Action::EditorNormalMode, // clears pending_colon
-                    _ => Action::EditorNormalMode, // reset state
+                    KeyCode::Esc => Action::EditorNormalMode,
+                    _ => Action::EditorNormalMode,
                 }
             } else {
                 match key.code {
                     KeyCode::Char('i') => Action::EditorInsertMode,
+                    KeyCode::Char('h') | KeyCode::Left  => Action::EditorMoveLeft,
+                    KeyCode::Char('j') | KeyCode::Down  => Action::EditorMoveDown,
+                    KeyCode::Char('k') | KeyCode::Up    => Action::EditorMoveUp,
+                    KeyCode::Char('l') | KeyCode::Right => Action::EditorMoveRight,
                     KeyCode::Char('q') => Action::EditorAbort,
                     KeyCode::Enter => Action::EditorSave,
-                    KeyCode::Char(':') => Action::EditorChar(':'), // handled via pending_colon in main
+                    KeyCode::Char(':') => Action::EditorChar(':'),
                     KeyCode::Esc => Action::None,
                     _ => Action::None,
                 }
