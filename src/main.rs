@@ -86,10 +86,31 @@ fn run_app(
                     continue;
                 }
 
-                // Dismiss commit preview popup on q or Esc
+                // Handle commit preview popup — scroll or dismiss
                 if app.commit_preview.is_some() {
-                    if matches!(key.code, KeyCode::Char('q') | KeyCode::Esc) {
-                        app.commit_preview = None;
+                    match key.code {
+                        KeyCode::Char('q') | KeyCode::Esc => app.commit_preview = None,
+                        KeyCode::Char('j') | KeyCode::Down => {
+                            if let Some((_, _, ref mut scroll)) = app.commit_preview {
+                                *scroll = scroll.saturating_add(1);
+                            }
+                        }
+                        KeyCode::Char('k') | KeyCode::Up => {
+                            if let Some((_, _, ref mut scroll)) = app.commit_preview {
+                                *scroll = scroll.saturating_sub(1);
+                            }
+                        }
+                        KeyCode::Char('d') => {
+                            if let Some((_, _, ref mut scroll)) = app.commit_preview {
+                                *scroll = scroll.saturating_add(20);
+                            }
+                        }
+                        KeyCode::Char('u') => {
+                            if let Some((_, _, ref mut scroll)) = app.commit_preview {
+                                *scroll = scroll.saturating_sub(20);
+                            }
+                        }
+                        _ => {}
                     }
                     continue;
                 }
@@ -194,6 +215,7 @@ fn run_app(
                                     app.commit_preview = Some((
                                         format!("{} {}", info.short_hash, info.summary),
                                         content,
+                                        0,
                                     ));
                                 }
                                 Err(e) => {

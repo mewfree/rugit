@@ -59,8 +59,8 @@ pub fn render(f: &mut Frame, app: &mut App) {
     }
 
     // Commit preview popup
-    if let Some((title, content)) = &app.commit_preview.clone() {
-        popup::render_commit_preview(f, area, title, content);
+    if let Some((title, content, scroll)) = &app.commit_preview.clone() {
+        popup::render_commit_preview(f, area, title, content, *scroll);
     }
 
     // Commit submenu popup

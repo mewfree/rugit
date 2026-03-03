@@ -93,7 +93,7 @@ pub fn render_help(f: &mut Frame, area: Rect) {
     f.render_widget(paragraph, popup_area);
 }
 
-pub fn render_commit_preview(f: &mut Frame, area: Rect, title: &str, content: &str) {
+pub fn render_commit_preview(f: &mut Frame, area: Rect, title: &str, content: &str, scroll: u16) {
     let popup_area = centered_rect(90, 85, area);
     f.render_widget(Clear, popup_area);
 
@@ -126,7 +126,7 @@ pub fn render_commit_preview(f: &mut Frame, area: Rect, title: &str, content: &s
                 .borders(Borders::ALL)
                 .border_style(Style::new().fg(Color::Yellow)),
         )
-        .wrap(ratatui::widgets::Wrap { trim: false });
+        .scroll((scroll, 0));
 
     f.render_widget(paragraph, popup_area);
 }
