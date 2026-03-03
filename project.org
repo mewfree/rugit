@@ -24,6 +24,7 @@
 ** TODO Diff viewer buffer (=d= on a commit or file)
 ** DONE Hunk-level staging
 ** DONE Exhaustive footer bar (s/S, u/U, Tab, c, p, F, l, g, ?, q)
+** DONE Unpushed commits section in status buffer
 ** TODO Line-level staging
 ** TODO Branch management popup (=b=)
 ** TODO Stash popup (=z=)

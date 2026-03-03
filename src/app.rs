@@ -90,6 +90,10 @@ pub enum StatusItem {
     DiffLine {
         line: String,
     },
+    UnpushedHeader {
+        count: usize,
+        upstream: String,
+    },
     RecentHeader,
     RecentCommit {
         info: CommitInfo,
@@ -241,6 +245,19 @@ impl App {
                         }
                     }
                 }
+            }
+        }
+
+        // Unpushed commits section
+        if !self.status.unpushed.is_empty() {
+            if items.len() > 1 { items.push(StatusItem::Spacer); }
+            let upstream = self.status.upstream.clone().unwrap_or_else(|| "upstream".to_string());
+            items.push(StatusItem::UnpushedHeader {
+                count: self.status.unpushed.len(),
+                upstream,
+            });
+            for info in &self.status.unpushed {
+                items.push(StatusItem::RecentCommit { info: info.clone() });
             }
         }
 

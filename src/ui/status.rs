@@ -88,6 +88,14 @@ fn status_item_to_list_item(item: &StatusItem) -> ListItem<'static> {
             )))
         }
 
+        StatusItem::UnpushedHeader { count, upstream } => ListItem::new(Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                format!("Unpushed to {} ({})", upstream, count),
+                Style::new().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+            ),
+        ])),
+
         StatusItem::RecentHeader => ListItem::new(Line::from(vec![
             Span::raw(" "),
             Span::styled(

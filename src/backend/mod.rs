@@ -44,6 +44,7 @@ pub struct RepoStatus {
     pub staged: Vec<FileEntry>,
     pub unstaged: Vec<FileEntry>,
     pub untracked: Vec<FileEntry>,
+    pub unpushed: Vec<CommitInfo>,
 }
 
 #[derive(Debug, Clone)]

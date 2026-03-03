@@ -76,6 +76,7 @@ impl Backend for JjBackend {
             staged,
             unstaged,
             untracked: vec![],
+            unpushed: vec![],
         })
     }
 

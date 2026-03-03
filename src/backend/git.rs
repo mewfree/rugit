@@ -20,6 +20,52 @@ impl GitBackend {
         Ok(Self { repo, root })
     }
 
+    fn upstream_info(&self) -> (Option<String>, Vec<super::CommitInfo>) {
+        // Find the upstream for the current branch via git2
+        let head = match self.repo.head() {
+            Ok(h) => h,
+            Err(_) => return (None, vec![]),
+        };
+        let branch = match git2::Branch::wrap(head) {
+            b => b,
+        };
+        let upstream_branch = match branch.upstream() {
+            Ok(u) => u,
+            Err(_) => return (None, vec![]),
+        };
+        let upstream_name = upstream_branch
+            .name()
+            .ok()
+            .flatten()
+            .map(String::from);
+        let upstream_oid = match upstream_branch.get().peel_to_commit() {
+            Ok(c) => c.id(),
+            Err(_) => return (upstream_name, vec![]),
+        };
+
+        // Collect commits reachable from HEAD but not from upstream
+        let mut walk = match self.repo.revwalk() {
+            Ok(w) => w,
+            Err(_) => return (upstream_name, vec![]),
+        };
+        if walk.push_head().is_err() { return (upstream_name, vec![]); }
+        if walk.hide(upstream_oid).is_err() { return (upstream_name, vec![]); }
+        let _ = walk.set_sorting(git2::Sort::TIME);
+
+        let mut commits = Vec::new();
+        for oid_result in walk {
+            let oid = match oid_result { Ok(o) => o, Err(_) => break };
+            let commit = match self.repo.find_commit(oid) { Ok(c) => c, Err(_) => break };
+            commits.push(super::CommitInfo {
+                short_hash: format!("{:.7}", commit.id()),
+                summary: commit.summary().unwrap_or("").to_string(),
+                author: commit.author().name().unwrap_or("").to_string(),
+                timestamp: commit.time().seconds(),
+            });
+        }
+        (upstream_name, commits)
+    }
+
     fn head_info(&self) -> (Option<String>, Option<String>, Option<String>) {
         let head = match self.repo.head() {
             Ok(h) => h,
@@ -106,15 +152,17 @@ impl Backend for GitBackend {
         }
 
         let (head, head_short_hash, head_summary) = self.head_info();
+        let (upstream, unpushed) = self.upstream_info();
 
         Ok(RepoStatus {
             head,
             head_short_hash,
             head_summary,
-            upstream: None, // TODO: fetch upstream tracking info
+            upstream,
             staged,
             unstaged,
             untracked,
+            unpushed,
         })
     }
 
