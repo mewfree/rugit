@@ -11,7 +11,7 @@ path = "src/main.rs"
 anyhow     = "1"
 clap       = { version = "4", features = ["derive"] }
 crossterm  = "0.28"
-git2       = "0.19"
+git2       = "0.20"
 ratatui    = "0.29"
 serde      = { version = "1", features = ["derive"] }
 similar    = { version = "2", features = ["text"] }
