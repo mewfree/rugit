@@ -1,0 +1,198 @@
+#+title: rugit
+#+description: A Magit-inspired terminal UI for Git and Jujutsu, written in Rust
+
+A keyboard-driven terminal UI for [[https://git-scm.com/][Git]] and [[https://github.com/martinvonz/jj][Jujutsu (jj)]], heavily inspired by [[https://magit.vc/][Magit]].
+Built in Rust for speed and portability.
+
+#+begin_example
+┌─ rugit ──────────────────────────────────────────────────────┐
+│ Head:     main  Add README                                    │
+│ Push:     origin/main  (up to date)                          │
+├──────────────────────────────────────────────────────────────┤
+│ Unstaged changes (2)                                         │
+│   modified  src/ui/status.rs                                 │
+│   modified  src/backend/git.rs                               │
+│                                                              │
+│ Staged changes (1)                                           │
+│   modified  Cargo.toml                                       │
+│                                                              │
+│ Recent commits                                               │
+│ ● abc1234  Add README                                        │
+│ ○ def5678  Initial project scaffold                          │
+└──────────────────────────────────────────────────────────────┘
+#+end_example
+
+* Features
+
+- *Magit-like status buffer* — staged, unstaged, and untracked changes at a glance
+- *Interactive staging* — stage/unstage individual files, hunks, or lines
+- *Inline diffs* — expand any change to see a syntax-highlighted diff
+- *Commit workflow* — compose commit messages in your =EDITOR= with a full diff summary
+- *Branch management* — create, rename, delete, and switch branches
+- *Log view* — navigate commit history with search and filtering
+- *Stash support* — stash, pop, apply, and inspect stashes
+- *Rebase & merge* — interactive rebase, merge with conflict resolution helpers
+- *Jujutsu compatibility* — first-class support for =jj= repositories alongside Git
+- *Keyboard-first* — every action reachable from the keyboard; no mouse required
+- *Fast* — written in Rust; cold-start in milliseconds even on large repositories
+
+* Installation
+
+** From source
+
+Requires [[https://rustup.rs/][Rust]] 1.75 or later.
+
+#+begin_src sh
+git clone https://github.com/yourname/rugit
+cd rugit
+cargo install --path .
+#+end_src
+
+** Cargo
+
+#+begin_src sh
+cargo install rugit
+#+end_src
+
+* Usage
+
+Run =rugit= (or =rg= for short) from anywhere inside a Git or Jujutsu repository:
+
+#+begin_src sh
+rugit
+#+end_src
+
+rugit opens the *status buffer* by default. From there every workflow is one
+or two keystrokes away.
+
+* Key bindings
+
+** Global
+
+| Key       | Action                      |
+|-----------+-----------------------------|
+| =?=       | Show key binding help       |
+| =q=       | Quit / close current buffer |
+| =g=       | Refresh                     |
+| =Tab=     | Expand / collapse section   |
+| =j= / =k= | Move down / up              |
+| =G=       | Open log buffer             |
+| =b=       | Branch menu                 |
+| =r=       | Rebase menu                 |
+| =m=       | Merge menu                  |
+| =z=       | Stash menu                  |
+| =!=       | Run arbitrary git command   |
+
+** Status buffer
+
+| Key   | Action                                      |
+|-------+---------------------------------------------|
+| =s=   | Stage file / hunk / region                  |
+| =u=   | Unstage file / hunk / region                |
+| =S=   | Stage all unstaged changes                  |
+| =U=   | Unstage all staged changes                  |
+| =d=   | Discard file / hunk / region                |
+| =c c= | Commit staged changes                       |
+| =c a= | Amend last commit                           |
+| =c w= | Reword last commit message                  |
+| =c e= | Extend last commit (amend without rewording)|
+| =c f= | Fixup into a previous commit                |
+| =c s= | Squash into a previous commit               |
+| =F=   | Pull                                        |
+| =P=   | Push                                        |
+
+** Log buffer
+
+| Key       | Action                    |
+|-----------+---------------------------|
+| =Enter=   | Show commit details       |
+| =d=       | Diff commit against HEAD  |
+| =r i=     | Interactive rebase here   |
+| =t=       | Tag commit                |
+| =y=       | Copy commit hash          |
+| =/=       | Search commits            |
+
+* Jujutsu support
+
+rugit detects whether the current repository is managed by =jj= and switches
+its backend accordingly. When running in jj mode:
+
+- The status buffer reflects =jj status= output
+- Staging is replaced by jj's first-class *change* model — no index required
+- Commits map to jj *changes* (=@=, parents, descendants)
+- =c c= calls =jj commit=; =c a= calls =jj squash= (amend)
+- The log buffer renders the change graph from =jj log=
+- Branch operations use =jj bookmark= commands
+- Co-located repositories (both =.git= and =.jj= present) are supported; you
+  can choose which backend to use with =--backend git|jj=
+
+* Configuration
+
+rugit reads configuration from =~/.config/rugit/config.toml=:
+
+#+begin_src toml
+# Which backend to prefer when both .git and .jj are present
+# Options: "git" | "jj" | "auto" (default)
+backend = "auto"
+
+# Open commit messages in this editor (falls back to $EDITOR)
+editor = "nvim"
+
+# Colour theme: "default" | "catppuccin" | "gruvbox" | "nord" | path to theme file
+theme = "default"
+
+[keybindings]
+# Override individual key bindings
+stage   = "s"
+unstage = "u"
+commit  = "c c"
+#+end_src
+
+* Architecture
+
+#+begin_example
+rugit/
+├── src/
+│   ├── main.rs          # Entry point, CLI argument parsing
+│   ├── app.rs           # Top-level application state and event loop
+│   ├── backend/
+│   │   ├── mod.rs       # Backend trait (shared interface for Git and jj)
+│   │   ├── git.rs       # Git backend (libgit2 via git2 crate)
+│   │   └── jj.rs        # Jujutsu backend (spawns jj subprocess)
+│   ├── ui/
+│   │   ├── mod.rs       # TUI root; Ratatui layout
+│   │   ├── status.rs    # Status buffer widget
+│   │   ├── log.rs       # Log / graph buffer widget
+│   │   ├── diff.rs      # Inline diff renderer
+│   │   ├── commit.rs    # Commit message editor integration
+│   │   └── popup.rs     # Help, branch, stash popups
+│   ├── keybindings.rs   # Key binding registry and dispatch
+│   └── config.rs        # Configuration loading (toml)
+├── Cargo.toml
+└── README.org
+#+end_example
+
+Key dependencies:
+
+| Crate     | Purpose                                |
+|-----------+----------------------------------------|
+| [[https://crates.io/crates/ratatui][ratatui]]   | Terminal UI framework                  |
+| [[https://crates.io/crates/crossterm][crossterm]] | Cross-platform terminal backend        |
+| [[https://crates.io/crates/git2][git2]]      | Libgit2 bindings for Git operations    |
+| [[https://crates.io/crates/serde][serde]]     | Config serialisation / deserialisation |
+| [[https://crates.io/crates/toml][toml]]      | Configuration file parsing             |
+| [[https://crates.io/crates/syntect][syntect]]   | Syntax highlighting in diffs           |
+| [[https://crates.io/crates/similar][similar]]   | Diff generation (Myers / patience)     |
+| [[https://crates.io/crates/clap][clap]]      | CLI argument parsing                   |
+
+* Comparison with similar tools
+
+| Feature            | rugit | [[https://github.com/extrawurst/gitui][gitui]] | [[https://github.com/jesseduffield/lazygit][lazygit]] | Magit |
+|--------------------+-------+-------+---------+-------|
+| Language           | Rust  | Rust  | Go      | Elisp |
+| jj support         | Yes   | No    | No      | No    |
+| Hunk-level staging | Yes   | Yes   | Yes     | Yes   |
+| Line-level staging | Yes   | No    | No      | Yes   |
+| Interactive rebase | Yes   | No    | Yes     | Yes   |
+| Config file        | TOML  | —     | YAML    | Elisp |
+| Emacs integration  | No    | No    | No      | Yes   |
