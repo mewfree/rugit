@@ -58,6 +58,11 @@ pub fn render(f: &mut Frame, app: &mut App) {
         }
     }
 
+    // Commit submenu popup
+    if app.pending_key == Some(KeyCode::Char('c')) {
+        popup::render_commit_popup(f, area);
+    }
+
     // Push submenu popup
     if app.pending_key == Some(KeyCode::Char('P')) {
         popup::render_push_popup(f, area);

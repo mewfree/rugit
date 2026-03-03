@@ -93,6 +93,40 @@ pub fn render_help(f: &mut Frame, area: Rect) {
     f.render_widget(paragraph, popup_area);
 }
 
+pub fn render_commit_popup(f: &mut Frame, area: Rect) {
+    let popup_area = centered_rect(50, 30, area);
+    f.render_widget(Clear, popup_area);
+
+    let lines = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  c  ", Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::raw("Commit"),
+        ]),
+        Line::from(vec![
+            Span::styled("  a  ", Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::raw("Amend"),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Esc / any other key: cancel",
+            Style::new().fg(Color::DarkGray),
+        )),
+    ];
+
+    let paragraph = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title(" Commit ")
+                .title_alignment(Alignment::Center)
+                .borders(Borders::ALL)
+                .border_style(Style::new().fg(Color::Green)),
+        )
+        .alignment(Alignment::Left);
+
+    f.render_widget(paragraph, popup_area);
+}
+
 pub fn render_push_popup(f: &mut Frame, area: Rect) {
     let popup_area = centered_rect(50, 30, area);
     f.render_widget(Clear, popup_area);
