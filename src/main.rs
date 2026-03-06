@@ -155,6 +155,12 @@ fn run_app(
                         }
                         app.pending_key = None;
                     }
+                    Action::DiscardFile => {
+                        if let Err(e) = app.discard_at_cursor() {
+                            app.status_msg = Some(format!("Error: {}", e));
+                        }
+                        app.pending_key = None;
+                    }
                     Action::StageAll => {
                         if let Err(e) = app.stage_all() {
                             app.status_msg = Some(format!("Error: {}", e));

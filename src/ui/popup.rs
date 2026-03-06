@@ -30,6 +30,7 @@ pub fn render_help(f: &mut Frame, area: Rect) {
         section("  Staging"),
         key("  s           ", "Stage file or hunk at point"),
         key("  u           ", "Unstage file or hunk at point"),
+        key("  x           ", "Discard changes at point"),
         key("  S           ", "Stage all changes"),
         key("  U           ", "Unstage all changes"),
         Line::from(""),

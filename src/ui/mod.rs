@@ -134,6 +134,8 @@ fn build_footer(app: &App) -> Line<'static> {
             sep(),
             key("[u/U]"), Span::raw("nstage"),
             sep(),
+            key("[x]"), Span::raw("discard"),
+            sep(),
             key("[Tab]"), Span::raw("expand"),
             sep(),
             key("[c]"), Span::raw("ommit"),

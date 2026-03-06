@@ -39,6 +39,7 @@ Implement all Backend trait methods using =jj= subprocess calls.
 
 * Done
 
+** DONE Discard keybinding (=x= on unstaged/untracked file)
 ** DONE Scaffold Cargo project (Cargo.toml, directory layout)
 ** DONE Backend trait and shared data model
 ** DONE Git backend – read operations (status, log, diff, branches)

@@ -25,6 +25,7 @@ pub enum Action {
     Push,         // 'P p'
     PushForce,    // 'P f'
     Pull,
+    DiscardFile,
     // Editor actions
     EditorChar(char),
     EditorBackspace,
@@ -90,6 +91,7 @@ pub fn key_to_action(key: KeyEvent, pending: Option<KeyCode>) -> Action {
         KeyCode::Char('c') => Action::CommitBegin,
         KeyCode::Char('p') => Action::PushBegin,
         KeyCode::Char('F') => Action::Pull,
+        KeyCode::Char('x') => Action::DiscardFile,
         _ => Action::None,
     }
 }

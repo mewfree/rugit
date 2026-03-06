@@ -423,6 +423,28 @@ impl App {
         Ok(())
     }
 
+    pub fn discard_at_cursor(&mut self) -> Result<()> {
+        if let Some(item) = self.items.get(self.cursor).cloned() {
+            match item {
+                StatusItem::File { entry, section, .. } => {
+                    match section {
+                        Section::Unstaged | Section::Untracked => {
+                            self.backend.discard_file(&entry.path)?;
+                            self.diff_cache.remove(&self.file_key(&section, &entry.path));
+                            self.refresh()?;
+                            self.status_msg = Some(format!("Discarded: {}", entry.path));
+                        }
+                        Section::Staged => {
+                            self.status_msg = Some(format!("{} is staged — unstage first", entry.path));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
     pub fn stage_all(&mut self) -> Result<()> {
         self.backend.stage_all()?;
         self.refresh()?;
