@@ -439,6 +439,19 @@ impl App {
                         }
                     }
                 }
+                StatusItem::HunkHeader { hunk_index, file_path, section, .. } => {
+                    if section == Section::Unstaged {
+                        let key = self.file_key(&section, &file_path);
+                        if let Some(diff) = self.diff_cache.get(&key).cloned() {
+                            if let Some(patch) = Self::extract_hunk_patch(&diff, hunk_index) {
+                                self.backend.discard_patch(&patch)?;
+                                self.diff_cache.remove(&key);
+                                self.refresh()?;
+                                self.status_msg = Some(format!("Discarded hunk {}", hunk_index + 1));
+                            }
+                        }
+                    }
+                }
                 _ => {}
             }
         }

@@ -136,6 +136,10 @@ impl Backend for JjBackend {
         bail!("jj hunk staging not yet implemented")
     }
 
+    fn discard_patch(&self, _patch: &str) -> Result<()> {
+        bail!("jj hunk discard not yet implemented")
+    }
+
     fn show_commit(&self, hash: &str) -> Result<String> {
         self.run_jj(&["show", "--no-pager", hash])
     }

@@ -73,6 +73,7 @@ pub trait Backend {
     fn pull(&self) -> Result<String>;
     fn show_commit(&self, hash: &str) -> Result<String>;
     fn apply_patch(&self, patch: &str, reverse: bool) -> Result<()>;
+    fn discard_patch(&self, patch: &str) -> Result<()>;
 }
 
 #[derive(Debug, Clone, PartialEq, ValueEnum)]

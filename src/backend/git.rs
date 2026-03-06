@@ -416,6 +416,26 @@ impl Backend for GitBackend {
         Ok(())
     }
 
+    fn discard_patch(&self, patch: &str) -> Result<()> {
+        use std::io::Write;
+        let mut child = std::process::Command::new("git")
+            .args(["apply", "--reverse"])
+            .current_dir(&self.root)
+            .stdin(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()?;
+        if let Some(stdin) = child.stdin.take() {
+            let mut stdin = stdin;
+            stdin.write_all(patch.as_bytes())?;
+        }
+        let out = child.wait_with_output()?;
+        if !out.status.success() {
+            let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            anyhow::bail!("{}", msg);
+        }
+        Ok(())
+    }
+
     fn show_commit(&self, hash: &str) -> Result<String> {
         let out = std::process::Command::new("git")
             .args(["show", "--stat", "-p", "--color=never", hash])
