@@ -274,64 +274,26 @@ impl Backend for GitBackend {
     }
 
     fn commit(&self, message: &str) -> Result<()> {
-        let sig = self.repo.signature()?;
-        let mut index = self.repo.index()?;
-        let tree_id = index.write_tree()?;
-        let tree = self.repo.find_tree(tree_id)?;
-
-        let parents: Vec<git2::Commit> = if let Ok(head) = self.repo.head() {
-            if let Ok(commit) = head.peel_to_commit() {
-                vec![commit]
-            } else {
-                vec![]
-            }
-        } else {
-            vec![]
-        };
-
-        let parent_refs: Vec<&git2::Commit> = parents.iter().collect();
-
-        self.repo.commit(
-            Some("HEAD"),
-            &sig,
-            &sig,
-            message,
-            &tree,
-            &parent_refs,
-        )?;
-
+        let out = std::process::Command::new("git")
+            .args(["commit", "-m", message])
+            .current_dir(&self.root)
+            .output()?;
+        if !out.status.success() {
+            let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            anyhow::bail!("{}", msg);
+        }
         Ok(())
     }
 
     fn amend(&self, msg: &str) -> Result<()> {
-        let sig = self.repo.signature()?;
-        let head_commit = self.repo.head()?.peel_to_commit()?;
-
-        let has_staged = self.repo.statuses(None)?.iter().any(|e| {
-            let s = e.status();
-            s.contains(git2::Status::INDEX_NEW)
-                || s.contains(git2::Status::INDEX_MODIFIED)
-                || s.contains(git2::Status::INDEX_DELETED)
-                || s.contains(git2::Status::INDEX_RENAMED)
-        });
-
-        let tree = if has_staged {
-            let mut index = self.repo.index()?;
-            let tree_id = index.write_tree()?;
-            self.repo.find_tree(tree_id)?
-        } else {
-            head_commit.tree()?
-        };
-
-        head_commit.amend(
-            Some("HEAD"),
-            Some(&sig),
-            Some(&sig),
-            None,
-            Some(msg),
-            Some(&tree),
-        )?;
-
+        let out = std::process::Command::new("git")
+            .args(["commit", "--amend", "-m", msg])
+            .current_dir(&self.root)
+            .output()?;
+        if !out.status.success() {
+            let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            anyhow::bail!("{}", msg);
+        }
         Ok(())
     }
 
