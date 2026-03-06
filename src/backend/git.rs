@@ -88,6 +88,23 @@ impl GitBackend {
 
         (branch, short_hash, summary)
     }
+
+    fn extract_hunk_patch_str(diff: &str, hunk_index: usize) -> Option<String> {
+        let lines: Vec<&str> = diff.lines().collect();
+        let first_hunk = lines.iter().position(|l| l.starts_with("@@"))?;
+        let header = &lines[..first_hunk];
+        let hunk_starts: Vec<usize> = lines.iter()
+            .enumerate()
+            .filter_map(|(i, l)| if l.starts_with("@@") { Some(i) } else { None })
+            .collect();
+        let start = *hunk_starts.get(hunk_index)?;
+        let end = hunk_starts.get(hunk_index + 1).copied().unwrap_or(lines.len());
+        let mut patch = header.join("\n");
+        patch.push('\n');
+        patch.push_str(&lines[start..end].join("\n"));
+        patch.push('\n');
+        Some(patch)
+    }
 }
 
 impl Backend for GitBackend {
@@ -223,9 +240,14 @@ impl Backend for GitBackend {
     }
 
     fn discard_file(&self, path: &str) -> Result<()> {
-        let mut cb = git2::build::CheckoutBuilder::new();
-        cb.path(path).force();
-        self.repo.checkout_index(None, Some(&mut cb))?;
+        let out = std::process::Command::new("git")
+            .args(["restore", "--", path])
+            .current_dir(&self.root)
+            .output()?;
+        if !out.status.success() {
+            let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            anyhow::bail!("{}", msg);
+        }
         Ok(())
     }
 
@@ -416,16 +438,41 @@ impl Backend for GitBackend {
         Ok(())
     }
 
-    fn discard_patch(&self, patch: &str) -> Result<()> {
+    fn discard_all_unstaged(&self) -> Result<()> {
+        let out = std::process::Command::new("git")
+            .args(["restore", "."])
+            .current_dir(&self.root)
+            .output()?;
+        if !out.status.success() {
+            let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            anyhow::bail!("{}", msg);
+        }
+        Ok(())
+    }
+
+    fn discard_hunk(&self, path: &str, hunk_index: usize) -> Result<()> {
         use std::io::Write;
+        // Get a fresh diff via subprocess so the patch format exactly matches
+        // what `git apply` expects when operating on the working tree.
+        let diff_out = std::process::Command::new("git")
+            .args(["diff", "--", path])
+            .current_dir(&self.root)
+            .output()?;
+        if !diff_out.status.success() {
+            let msg = String::from_utf8_lossy(&diff_out.stderr).trim().to_string();
+            anyhow::bail!("{}", msg);
+        }
+        let diff = String::from_utf8_lossy(&diff_out.stdout);
+        let patch = Self::extract_hunk_patch_str(&diff, hunk_index)
+            .ok_or_else(|| anyhow::anyhow!("hunk {} not found in diff", hunk_index))?;
+
         let mut child = std::process::Command::new("git")
             .args(["apply", "--reverse"])
             .current_dir(&self.root)
             .stdin(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()?;
-        if let Some(stdin) = child.stdin.take() {
-            let mut stdin = stdin;
+        if let Some(mut stdin) = child.stdin.take() {
             stdin.write_all(patch.as_bytes())?;
         }
         let out = child.wait_with_output()?;

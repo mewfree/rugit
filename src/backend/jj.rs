@@ -136,8 +136,12 @@ impl Backend for JjBackend {
         bail!("jj hunk staging not yet implemented")
     }
 
-    fn discard_patch(&self, _patch: &str) -> Result<()> {
+    fn discard_hunk(&self, _path: &str, _hunk_index: usize) -> Result<()> {
         bail!("jj hunk discard not yet implemented")
+    }
+
+    fn discard_all_unstaged(&self) -> Result<()> {
+        bail!("jj write ops not yet implemented")
     }
 
     fn show_commit(&self, hash: &str) -> Result<String> {

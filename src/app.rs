@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use anyhow::Result;
 use crossterm::event::KeyCode;
 
-use crate::backend::{Backend, CommitInfo, FileEntry, RepoStatus};
+use crate::backend::{Backend, CommitInfo, FileEntry, FileKind, RepoStatus};
 
 use crate::config::Config;
 
@@ -428,28 +428,72 @@ impl App {
             match item {
                 StatusItem::File { entry, section, .. } => {
                     match section {
-                        Section::Unstaged | Section::Untracked => {
+                        Section::Unstaged => {
                             self.backend.discard_file(&entry.path)?;
                             self.diff_cache.remove(&self.file_key(&section, &entry.path));
                             self.refresh()?;
                             self.status_msg = Some(format!("Discarded: {}", entry.path));
+                        }
+                        Section::Untracked => {
+                            let full_path = self.backend.repo_root().join(&entry.path);
+                            if entry.kind == FileKind::Untracked && full_path.is_dir() {
+                                std::fs::remove_dir_all(&full_path)?;
+                            } else {
+                                std::fs::remove_file(&full_path)?;
+                            }
+                            self.refresh()?;
+                            self.status_msg = Some(format!("Deleted: {}", entry.path));
                         }
                         Section::Staged => {
                             self.status_msg = Some(format!("{} is staged — unstage first", entry.path));
                         }
                     }
                 }
+                StatusItem::Header { section, .. } => {
+                    match section {
+                        Section::Unstaged => {
+                            self.backend.discard_all_unstaged()?;
+                            self.diff_cache.clear();
+                            self.refresh()?;
+                            self.status_msg = Some("Discarded all unstaged changes".to_string());
+                        }
+                        Section::Untracked => {
+                            let root = self.backend.repo_root().to_path_buf();
+                            for entry in self.status.untracked.clone() {
+                                let full_path = root.join(&entry.path);
+                                if full_path.is_dir() {
+                                    std::fs::remove_dir_all(&full_path)?;
+                                } else {
+                                    std::fs::remove_file(&full_path)?;
+                                }
+                            }
+                            self.refresh()?;
+                            self.status_msg = Some("Deleted all untracked files".to_string());
+                        }
+                        Section::Staged => {
+                            self.status_msg = Some("Cannot discard staged changes — unstage first".to_string());
+                        }
+                    }
+                }
                 StatusItem::HunkHeader { hunk_index, file_path, section, .. } => {
                     if section == Section::Unstaged {
                         let key = self.file_key(&section, &file_path);
-                        if let Some(diff) = self.diff_cache.get(&key).cloned() {
-                            if let Some(patch) = Self::extract_hunk_patch(&diff, hunk_index) {
-                                self.backend.discard_patch(&patch)?;
-                                self.diff_cache.remove(&key);
-                                self.refresh()?;
-                                self.status_msg = Some(format!("Discarded hunk {}", hunk_index + 1));
+                        self.backend.discard_hunk(&file_path, hunk_index)?;
+                        // Re-fetch the diff so remaining hunks stay visible
+                        self.status = self.backend.status()?;
+                        self.recent_commits = self.backend.log(5).unwrap_or_default();
+                        if self.status.unstaged.iter().any(|e| e.path == file_path) {
+                            if let Ok(new_diff) = self.backend.diff_file(&file_path, false) {
+                                self.diff_cache.insert(key, new_diff);
                             }
+                        } else {
+                            self.diff_cache.remove(&key);
                         }
+                        self.rebuild_items();
+                        if !self.items.is_empty() && self.cursor >= self.items.len() {
+                            self.cursor = self.items.len() - 1;
+                        }
+                        self.status_msg = Some(format!("Discarded hunk {}", hunk_index + 1));
                     }
                 }
                 _ => {}
