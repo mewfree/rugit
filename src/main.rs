@@ -2,7 +2,7 @@ use std::io;
 use anyhow::Result;
 use clap::Parser;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -71,7 +71,28 @@ fn run_app(
         terminal.draw(|f| ui::render(f, app))?;
 
         if event::poll(std::time::Duration::from_millis(250))? {
-            if let Event::Key(key) = event::read()? {
+            match event::read()? {
+            Event::Mouse(mouse) => {
+                match mouse.kind {
+                    MouseEventKind::ScrollDown => {
+                        if let Some((_, _, ref mut scroll)) = app.commit_preview {
+                            *scroll = scroll.saturating_add(3);
+                        } else {
+                            app.move_down();
+                        }
+                    }
+                    MouseEventKind::ScrollUp => {
+                        if let Some((_, _, ref mut scroll)) = app.commit_preview {
+                            *scroll = scroll.saturating_sub(3);
+                        } else {
+                            app.move_up();
+                        }
+                    }
+                    _ => {}
+                }
+                if app.should_quit { break; }
+            }
+            Event::Key(key) => {
                 // Only process key press events (ignore release/repeat on some platforms)
                 if key.kind != KeyEventKind::Press {
                     continue;
@@ -297,6 +318,8 @@ fn run_app(
                 if app.should_quit {
                     break;
                 }
+            }
+            _ => {}
             }
         }
     }
