@@ -46,13 +46,6 @@ impl Config {
         Some(base.join("rugit").join("config.toml"))
     }
 
-    pub fn editor(&self) -> String {
-        self.editor
-            .clone()
-            .or_else(|| std::env::var("EDITOR").ok())
-            .or_else(|| std::env::var("VISUAL").ok())
-            .unwrap_or_else(|| "vi".to_string())
-    }
 }
 
 fn dirs_path() -> Option<PathBuf> {

@@ -169,7 +169,6 @@ impl Backend for JjBackend {
                     short_hash: parts[0].to_string(),
                     summary: parts[1].to_string(),
                     author: parts[2].to_string(),
-                    timestamp: 0, // TODO: parse timestamp
                 });
             }
         }

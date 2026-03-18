@@ -60,7 +60,6 @@ impl GitBackend {
                 short_hash: format!("{:.7}", commit.id()),
                 summary: commit.summary().unwrap_or("").to_string(),
                 author: commit.author().name().unwrap_or("").to_string(),
-                timestamp: commit.time().seconds(),
             });
         }
         (upstream_name, commits)
@@ -367,12 +366,10 @@ impl Backend for GitBackend {
             let short_hash = format!("{:.7}", commit.id());
             let summary = commit.summary().unwrap_or("").to_string();
             let author = commit.author().name().unwrap_or("").to_string();
-            let timestamp = commit.time().seconds();
             commits.push(CommitInfo {
                 short_hash,
                 summary,
                 author,
-                timestamp,
             });
         }
         Ok(commits)

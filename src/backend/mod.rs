@@ -52,7 +52,6 @@ pub struct CommitInfo {
     pub short_hash: String,
     pub summary: String,
     pub author: String,
-    pub timestamp: i64,
 }
 
 pub trait Backend {

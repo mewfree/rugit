@@ -172,30 +172,6 @@ pub fn render_push_popup(f: &mut Frame, area: Rect) {
     f.render_widget(paragraph, popup_area);
 }
 
-pub fn render_remote_result(f: &mut Frame, area: Rect, title: &str, output: &str) {
-    let popup_area = centered_rect(70, 60, area);
-    f.render_widget(Clear, popup_area);
-
-    let mut lines: Vec<Line> = output.lines().map(|l| Line::from(l.to_owned())).collect();
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "  Press q or Esc to dismiss",
-        Style::new().fg(Color::DarkGray),
-    )));
-
-    let paragraph = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .title(format!(" {} ", title))
-                .title_alignment(Alignment::Center)
-                .borders(Borders::ALL)
-                .border_style(Style::new().fg(Color::Cyan)),
-        )
-        .alignment(Alignment::Left);
-
-    f.render_widget(paragraph, popup_area);
-}
-
 /// Returns a centered rect with the given percentage width/height.
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
     let vertical = Layout::vertical([
