@@ -357,11 +357,23 @@ impl App {
                 }
                 StatusItem::Header { section, .. } => {
                     match section {
-                        Section::Unstaged | Section::Untracked => {
-                            self.backend.stage_all()?;
+                        Section::Unstaged => {
+                            let paths: Vec<String> = self.status.unstaged.iter().map(|e| e.path.clone()).collect();
+                            for path in &paths {
+                                self.backend.stage_file(path)?;
+                            }
                             self.diff_cache.clear();
                             self.refresh()?;
-                            self.status_msg = Some("Staged all changes".to_string());
+                            self.status_msg = Some("Staged all unstaged changes".to_string());
+                        }
+                        Section::Untracked => {
+                            let paths: Vec<String> = self.status.untracked.iter().map(|e| e.path.clone()).collect();
+                            for path in &paths {
+                                self.backend.stage_file(path)?;
+                            }
+                            self.diff_cache.clear();
+                            self.refresh()?;
+                            self.status_msg = Some("Staged all untracked files".to_string());
                         }
                         Section::Staged => {}
                     }
