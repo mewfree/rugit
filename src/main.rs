@@ -17,7 +17,7 @@ mod ui;
 use app::{ActiveBuffer, App, EditorState};
 use backend::{detect_backend, BackendKind};
 use config::Config;
-use keybindings::{editor_key_to_action, key_to_action, Action};
+use keybindings::{key_to_action, Action};
 
 #[derive(Parser, Debug)]
 #[command(name = "rugit", about = "A Magit-inspired git TUI", version)]
@@ -295,26 +295,6 @@ fn run_app(
                         // Clear pending key if it doesn't form a valid chord
                         app.pending_key = None;
                     }
-                    // Editor actions are handled by the editor subsystem, not here
-                    Action::EditorChar(_)
-                    | Action::EditorBackspace
-                    | Action::EditorNewline
-                    | Action::EditorSave
-                    | Action::EditorAbort
-                    | Action::EditorInsertMode
-                    | Action::EditorNormalMode
-                    | Action::EditorMoveLeft
-                    | Action::EditorMoveRight
-                    | Action::EditorMoveUp
-                    | Action::EditorMoveDown
-                    | Action::EditorDeleteBegin
-                    | Action::EditorDeleteLine
-                    | Action::EditorDeleteChar
-                    | Action::EditorLineStart
-                    | Action::EditorWordForward
-                    | Action::EditorDeleteWord
-                    | Action::EditorAppend
-                    | Action::EditorAppendEnd => {}
                 }
 
                 if app.should_quit {
@@ -376,241 +356,115 @@ fn do_commit_amend(app: &mut App) -> Result<()> {
 /// Handle a keypress when the inline editor buffer is active.
 fn handle_editor_key(app: &mut App, key: crossterm::event::KeyEvent) {
     use app::EditorMode;
-    use crossterm::event::KeyModifiers;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     // Ctrl-C Ctrl-C (Emacs-style): first press arms, second press saves.
-    if key.modifiers.contains(KeyModifiers::CONTROL) {
-        if let crossterm::event::KeyCode::Char('c') = key.code {
-            if let Some(state) = app.editor.as_mut() {
-                if state.pending_ctrl_c {
-                    // Second C-c: save/commit
-                    state.pending_ctrl_c = false;
-                } else {
-                    state.pending_ctrl_c = true;
-                    return;
-                }
+    if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+        let fire_save = {
+            let Some(state) = app.editor.as_mut() else { return };
+            if state.pending_ctrl_c {
+                state.pending_ctrl_c = false;
+                true
+            } else {
+                state.pending_ctrl_c = true;
+                false
             }
-            // Fall through to EditorSave logic below
-            editor_do_save(app);
-            return;
-        }
+        };
+        if fire_save { editor_do_save(app); }
+        return;
     }
 
-    // Clear transient pending flags on any non-ctrl key
     if let Some(state) = app.editor.as_mut() {
         state.pending_ctrl_c = false;
-        // pending_d is reset per-action below (EditorDeleteBegin sets it, all others clear it)
     }
 
-    let action = {
-        let state = match app.editor.as_ref() {
-            Some(s) => s,
-            None => return,
-        };
-        editor_key_to_action(key, &state.mode, state.pending_colon, state.pending_d)
+    let (fire_save, fire_abort) = {
+        let Some(state) = app.editor.as_mut() else { return };
+        let mut fire_save = false;
+        let mut fire_abort = false;
+
+        match state.mode {
+            EditorMode::Insert => {
+                if key.code == KeyCode::Esc {
+                    state.mode = EditorMode::Normal;
+                } else {
+                    state.textarea.input(key);
+                }
+            }
+            EditorMode::Normal => {
+                if state.pending_colon {
+                    match key.code {
+                        KeyCode::Char('w') => {} // wait for 'q'
+                        KeyCode::Char('q') => { fire_save = true; }
+                        _ => {}
+                    }
+                    if key.code != KeyCode::Char('w') {
+                        state.pending_colon = false;
+                    }
+                } else if state.pending_d {
+                    state.pending_d = false;
+                    let ctrl = KeyModifiers::CONTROL;
+                    let none = KeyModifiers::NONE;
+                    match key.code {
+                        KeyCode::Char('d') => {
+                            // dd: clear line (Home + Ctrl+K)
+                            state.textarea.input(KeyEvent::new(KeyCode::Home, none));
+                            state.textarea.input(KeyEvent::new(KeyCode::Char('k'), ctrl));
+                        }
+                        KeyCode::Char('w') => {
+                            // dw: Alt+D (kill word forward)
+                            state.textarea.input(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::ALT));
+                        }
+                        _ => {} // any other key cancels
+                    }
+                } else {
+                    let none = KeyModifiers::NONE;
+                    let alt  = KeyModifiers::ALT;
+                    let ctrl = KeyModifiers::CONTROL;
+                    match key.code {
+                        // Mode transitions
+                        KeyCode::Char('i') => { state.mode = EditorMode::Insert; }
+                        KeyCode::Char('a') => {
+                            state.mode = EditorMode::Insert;
+                            state.textarea.input(KeyEvent::new(KeyCode::Right, none));
+                        }
+                        KeyCode::Char('A') => {
+                            state.mode = EditorMode::Insert;
+                            state.textarea.input(KeyEvent::new(KeyCode::End, none));
+                        }
+                        // Movements
+                        KeyCode::Char('h') | KeyCode::Left  => { state.textarea.input(KeyEvent::new(KeyCode::Left,  none)); }
+                        KeyCode::Char('l') | KeyCode::Right => { state.textarea.input(KeyEvent::new(KeyCode::Right, none)); }
+                        KeyCode::Char('j') | KeyCode::Down  => { state.textarea.input(KeyEvent::new(KeyCode::Down,  none)); }
+                        KeyCode::Char('k') | KeyCode::Up    => { state.textarea.input(KeyEvent::new(KeyCode::Up,    none)); }
+                        KeyCode::Char('w') => { state.textarea.input(KeyEvent::new(KeyCode::Char('f'), alt)); }
+                        KeyCode::Char('b') => { state.textarea.input(KeyEvent::new(KeyCode::Char('b'), alt)); }
+                        KeyCode::Char('0') => { state.textarea.input(KeyEvent::new(KeyCode::Home, none)); }
+                        KeyCode::Char('$') => { state.textarea.input(KeyEvent::new(KeyCode::End,  none)); }
+                        // Editing
+                        KeyCode::Char('x') => { state.textarea.input(KeyEvent::new(KeyCode::Delete, none)); }
+                        KeyCode::Char('d') => { state.pending_d = true; }
+                        KeyCode::Char('u') => { state.textarea.undo(); }
+                        KeyCode::Char('r') if key.modifiers.contains(ctrl) => { state.textarea.redo(); }
+                        // Save / abort
+                        KeyCode::Enter      => { fire_save = true; }
+                        KeyCode::Char('q')  => { fire_abort = true; }
+                        KeyCode::Char(':')  => { state.pending_colon = true; }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        (fire_save, fire_abort)
     };
 
-    match action {
-        Action::EditorInsertMode => {
-            if let Some(state) = app.editor.as_mut() {
-                state.mode = EditorMode::Insert;
-                state.pending_colon = false;
-            }
-        }
-        Action::EditorNormalMode => {
-            if let Some(state) = app.editor.as_mut() {
-                state.mode = EditorMode::Normal;
-                state.pending_colon = false;
-                state.pending_d = false;
-            }
-        }
-        Action::EditorChar(c) => {
-            if let Some(state) = app.editor.as_mut() {
-                if state.mode == EditorMode::Normal && c == ':' {
-                    state.pending_colon = true;
-                } else {
-                    let row = state.cursor_row;
-                    let col = state.cursor_col;
-                    state.lines[row].insert(col, c);
-                    state.cursor_col += 1;
-                    state.pending_colon = false;
-                }
-            }
-        }
-        Action::EditorBackspace => {
-            if let Some(state) = app.editor.as_mut() {
-                let row = state.cursor_row;
-                let col = state.cursor_col;
-                if col > 0 {
-                    state.lines[row].remove(col - 1);
-                    state.cursor_col -= 1;
-                } else if row > 0 {
-                    let current_line = state.lines.remove(row);
-                    let prev_len = state.lines[row - 1].len();
-                    state.lines[row - 1].push_str(&current_line);
-                    state.cursor_row -= 1;
-                    state.cursor_col = prev_len;
-                }
-            }
-        }
-        Action::EditorNewline => {
-            if let Some(state) = app.editor.as_mut() {
-                let row = state.cursor_row;
-                let col = state.cursor_col;
-                let rest = state.lines[row].split_off(col);
-                state.lines.insert(row + 1, rest);
-                state.cursor_row += 1;
-                state.cursor_col = 0;
-            }
-        }
-        Action::EditorMoveLeft => {
-            if let Some(state) = app.editor.as_mut() {
-                if state.cursor_col > 0 {
-                    state.cursor_col -= 1;
-                }
-                state.pending_d = false;
-            }
-        }
-        Action::EditorMoveRight => {
-            if let Some(state) = app.editor.as_mut() {
-                let line_len = state.lines[state.cursor_row].len();
-                if state.cursor_col < line_len {
-                    state.cursor_col += 1;
-                }
-                state.pending_d = false;
-            }
-        }
-        Action::EditorMoveUp => {
-            if let Some(state) = app.editor.as_mut() {
-                if state.cursor_row > 0 {
-                    state.cursor_row -= 1;
-                    let line_len = state.lines[state.cursor_row].len();
-                    state.cursor_col = state.cursor_col.min(line_len);
-                }
-                state.pending_d = false;
-            }
-        }
-        Action::EditorMoveDown => {
-            if let Some(state) = app.editor.as_mut() {
-                if state.cursor_row + 1 < state.lines.len() {
-                    state.cursor_row += 1;
-                    let line_len = state.lines[state.cursor_row].len();
-                    state.cursor_col = state.cursor_col.min(line_len);
-                }
-                state.pending_d = false;
-            }
-        }
-        Action::EditorLineStart => {
-            if let Some(state) = app.editor.as_mut() {
-                state.cursor_col = 0;
-                state.pending_d = false;
-            }
-        }
-        Action::EditorWordForward => {
-            if let Some(state) = app.editor.as_mut() {
-                let line = &state.lines[state.cursor_row];
-                let chars: Vec<char> = line.chars().collect();
-                let mut col = state.cursor_col;
-                // Skip current word (non-whitespace)
-                while col < chars.len() && !chars[col].is_whitespace() {
-                    col += 1;
-                }
-                // Skip whitespace
-                while col < chars.len() && chars[col].is_whitespace() {
-                    col += 1;
-                }
-                if col < chars.len() {
-                    state.cursor_col = col;
-                } else if state.cursor_row + 1 < state.lines.len() {
-                    // Move to start of next line
-                    state.cursor_row += 1;
-                    state.cursor_col = 0;
-                }
-                state.pending_d = false;
-            }
-        }
-        Action::EditorDeleteWord => {
-            if let Some(state) = app.editor.as_mut() {
-                let row = state.cursor_row;
-                let col = state.cursor_col;
-                let indexed: Vec<(usize, char)> = state.lines[row].char_indices().collect();
-                let start_byte = indexed.get(col).map(|(b, _)| *b).unwrap_or(state.lines[row].len());
-                let mut idx = col;
-                // Skip current word (non-whitespace)
-                while idx < indexed.len() && !indexed[idx].1.is_whitespace() {
-                    idx += 1;
-                }
-                // Skip trailing whitespace
-                while idx < indexed.len() && indexed[idx].1.is_whitespace() {
-                    idx += 1;
-                }
-                let end_byte = indexed.get(idx).map(|(b, _)| *b).unwrap_or(state.lines[row].len());
-                state.lines[row].drain(start_byte..end_byte);
-                state.pending_d = false;
-            }
-        }
-        Action::EditorDeleteChar => {
-            if let Some(state) = app.editor.as_mut() {
-                let row = state.cursor_row;
-                let col = state.cursor_col;
-                if col < state.lines[row].len() {
-                    state.lines[row].remove(col);
-                    // Keep col valid
-                    let line_len = state.lines[row].len();
-                    if state.cursor_col > 0 && state.cursor_col >= line_len {
-                        state.cursor_col = line_len.saturating_sub(1);
-                    }
-                }
-                state.pending_d = false;
-            }
-        }
-        Action::EditorDeleteBegin => {
-            if let Some(state) = app.editor.as_mut() {
-                state.pending_d = true;
-            }
-        }
-        Action::EditorDeleteLine => {
-            if let Some(state) = app.editor.as_mut() {
-                if state.lines.len() == 1 {
-                    state.lines[0].clear();
-                    state.cursor_col = 0;
-                } else {
-                    state.lines.remove(state.cursor_row);
-                    if state.cursor_row >= state.lines.len() {
-                        state.cursor_row = state.lines.len() - 1;
-                    }
-                    let line_len = state.lines[state.cursor_row].len();
-                    state.cursor_col = state.cursor_col.min(line_len);
-                }
-                state.pending_d = false;
-            }
-        }
-        Action::EditorAppend => {
-            if let Some(state) = app.editor.as_mut() {
-                let line_len = state.lines[state.cursor_row].len();
-                if state.cursor_col < line_len {
-                    state.cursor_col += 1;
-                }
-                state.mode = EditorMode::Insert;
-                state.pending_d = false;
-            }
-        }
-        Action::EditorAppendEnd => {
-            if let Some(state) = app.editor.as_mut() {
-                state.cursor_col = state.lines[state.cursor_row].len();
-                state.mode = EditorMode::Insert;
-                state.pending_d = false;
-            }
-        }
-        Action::EditorSave => {
-            editor_do_save(app);
-        }
-        Action::EditorAbort => {
-            app.editor = None;
-            app.buffer = ActiveBuffer::Status;
-            app.status_msg = Some("Commit aborted".to_string());
-        }
-        _ => {}
+    if fire_save {
+        editor_do_save(app);
+    } else if fire_abort {
+        app.editor = None;
+        app.buffer = ActiveBuffer::Status;
+        app.status_msg = Some("Commit aborted".to_string());
     }
 }
 

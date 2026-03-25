@@ -9,87 +9,54 @@ use ratatui::{
 use crate::app::{EditorMode, EditorState};
 
 pub fn render_editor(f: &mut Frame, area: Rect, state: &EditorState) {
-    // Split: main text area + status line at bottom
+    // Layout: outer block | status line
     let chunks = Layout::vertical([
         Constraint::Min(1),
         Constraint::Length(1),
     ])
     .split(area);
 
-    let text_area = chunks[0];
-    let status_area = chunks[1];
-
-    // Build the block
     let border_style = match state.mode {
         EditorMode::Insert => Style::new().fg(Color::Green),
         EditorMode::Normal => Style::new().fg(Color::Yellow),
     };
 
-    let block = Block::default()
+    let outer_block = Block::default()
         .title(format!(" {} ", state.title))
         .title_alignment(Alignment::Center)
         .borders(Borders::ALL)
         .border_style(border_style);
 
-    // Inner area inside the block borders
-    let inner = block.inner(text_area);
+    let inner = outer_block.inner(chunks[0]);
+    f.render_widget(outer_block, chunks[0]);
 
-    // Render the block itself
-    f.render_widget(block, text_area);
+    // Split inner area: textarea on top, comments below
+    let comment_count = state.comments.len();
+    let comments_height = if comment_count == 0 {
+        0
+    } else {
+        (comment_count + 1).min(inner.height as usize / 2) as u16
+    };
 
-    // Build lines for the text content
-    let mut lines: Vec<Line> = Vec::new();
+    let inner_chunks = Layout::vertical([
+        Constraint::Min(1),
+        Constraint::Length(comments_height),
+    ])
+    .split(inner);
 
-    // Render each line of the editor content
-    for (row_idx, line_text) in state.lines.iter().enumerate() {
-        if row_idx == state.cursor_row {
-            // This line contains the cursor — render with cursor highlight
-            let col = state.cursor_col.min(line_text.len());
-            let before = &line_text[..col];
-            let cursor_char = if col < line_text.len() {
-                line_text[col..].chars().next().unwrap_or(' ')
-            } else {
-                ' '
-            };
-            let after = if col < line_text.len() {
-                let char_len = line_text[col..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
-                &line_text[col + char_len..]
-            } else {
-                ""
-            };
-
-            let mut spans = Vec::new();
-            if !before.is_empty() {
-                spans.push(Span::raw(before.to_string()));
-            }
-            spans.push(Span::styled(
-                cursor_char.to_string(),
-                Style::new().bg(Color::White).fg(Color::Black).add_modifier(Modifier::BOLD),
-            ));
-            if !after.is_empty() {
-                spans.push(Span::raw(after.to_string()));
-            }
-            lines.push(Line::from(spans));
-        } else {
-            lines.push(Line::from(line_text.clone()));
-        }
-    }
-
-    // Blank separator before comments
-    if !state.comments.is_empty() {
-        lines.push(Line::from(""));
-    }
+    // Render textarea (no block — we drew the outer block manually)
+    f.render_widget(&state.textarea, inner_chunks[0]);
 
     // Render comments greyed out
-    for comment in &state.comments {
-        lines.push(Line::from(Span::styled(
-            format!("# {}", comment),
-            Style::new().fg(Color::DarkGray),
-        )));
+    if comments_height > 0 {
+        let comment_lines: Vec<Line> = std::iter::once(Line::from(""))
+            .chain(state.comments.iter().map(|c| Line::from(Span::styled(
+                format!("# {}", c),
+                Style::new().fg(Color::DarkGray),
+            ))))
+            .collect();
+        f.render_widget(Paragraph::new(comment_lines), inner_chunks[1]);
     }
-
-    let paragraph = Paragraph::new(lines);
-    f.render_widget(paragraph, inner);
 
     // Status line
     let status_text = match state.mode {
@@ -109,26 +76,18 @@ pub fn render_editor(f: &mut Frame, area: Rect, state: &EditorState) {
                         " -- NORMAL --  ",
                         Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled(
-                        "i",
-                        Style::new().fg(Color::Cyan),
-                    ),
+                    Span::styled("i", Style::new().fg(Color::Cyan)),
                     Span::raw(": insert  "),
-                    Span::styled(
-                        "Enter",
-                        Style::new().fg(Color::Cyan),
-                    ),
+                    Span::styled("Enter", Style::new().fg(Color::Cyan)),
                     Span::raw(" / "),
-                    Span::styled(
-                        ":wq",
-                        Style::new().fg(Color::Cyan),
-                    ),
+                    Span::styled(":wq", Style::new().fg(Color::Cyan)),
                     Span::raw(": save  "),
-                    Span::styled(
-                        "q",
-                        Style::new().fg(Color::Cyan),
-                    ),
-                    Span::raw(": abort"),
+                    Span::styled("q", Style::new().fg(Color::Cyan)),
+                    Span::raw(": abort  "),
+                    Span::styled("u", Style::new().fg(Color::Cyan)),
+                    Span::raw(": undo  "),
+                    Span::styled("C-r", Style::new().fg(Color::Cyan)),
+                    Span::raw(": redo"),
                 ])
             }
         }
@@ -136,5 +95,5 @@ pub fn render_editor(f: &mut Frame, area: Rect, state: &EditorState) {
 
     let status_paragraph = Paragraph::new(status_text)
         .style(Style::new().bg(Color::Rgb(20, 30, 70)));
-    f.render_widget(status_paragraph, status_area);
+    f.render_widget(status_paragraph, chunks[1]);
 }

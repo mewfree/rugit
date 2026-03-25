@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use anyhow::Result;
 use crossterm::event::KeyCode;
+use tui_textarea::TextArea;
 
 use crate::backend::{Backend, CommitInfo, FileEntry, FileKind, RepoStatus};
 
@@ -14,17 +15,14 @@ pub enum ActiveBuffer {
     Editor,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum EditorMode {
     Normal,
     Insert,
 }
 
-#[derive(Debug, Clone)]
 pub struct EditorState {
-    pub lines: Vec<String>,
-    pub cursor_row: usize,
-    pub cursor_col: usize,
+    pub textarea: TextArea<'static>,
     pub mode: EditorMode,
     pub title: String,
     pub comments: Vec<String>,
@@ -41,11 +39,14 @@ impl EditorState {
         } else {
             initial_message.lines().map(String::from).collect()
         };
-        let col = lines[0].len();
+        let mut textarea = TextArea::new(lines);
+        // Position cursor at end of first line (matching original behavior)
+        textarea.input(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::End,
+            crossterm::event::KeyModifiers::NONE,
+        ));
         Self {
-            cursor_row: 0,
-            cursor_col: col,
-            lines,
+            textarea,
             mode: EditorMode::Insert,
             title,
             comments,
@@ -58,7 +59,7 @@ impl EditorState {
 
     /// Returns the commit message (lines joined, trimmed).
     pub fn message(&self) -> String {
-        self.lines.join("\n").trim().to_string()
+        self.textarea.lines().join("\n").trim().to_string()
     }
 }
 
