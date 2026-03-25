@@ -312,6 +312,7 @@ fn run_app(
                     | Action::EditorDeleteChar
                     | Action::EditorLineStart
                     | Action::EditorWordForward
+                    | Action::EditorDeleteWord
                     | Action::EditorAppend
                     | Action::EditorAppendEnd => {}
                 }
@@ -525,6 +526,26 @@ fn handle_editor_key(app: &mut App, key: crossterm::event::KeyEvent) {
                     state.cursor_row += 1;
                     state.cursor_col = 0;
                 }
+                state.pending_d = false;
+            }
+        }
+        Action::EditorDeleteWord => {
+            if let Some(state) = app.editor.as_mut() {
+                let row = state.cursor_row;
+                let col = state.cursor_col;
+                let indexed: Vec<(usize, char)> = state.lines[row].char_indices().collect();
+                let start_byte = indexed.get(col).map(|(b, _)| *b).unwrap_or(state.lines[row].len());
+                let mut idx = col;
+                // Skip current word (non-whitespace)
+                while idx < indexed.len() && !indexed[idx].1.is_whitespace() {
+                    idx += 1;
+                }
+                // Skip trailing whitespace
+                while idx < indexed.len() && indexed[idx].1.is_whitespace() {
+                    idx += 1;
+                }
+                let end_byte = indexed.get(idx).map(|(b, _)| *b).unwrap_or(state.lines[row].len());
+                state.lines[row].drain(start_byte..end_byte);
                 state.pending_d = false;
             }
         }

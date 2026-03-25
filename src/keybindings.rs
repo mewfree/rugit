@@ -40,6 +40,7 @@ pub enum Action {
     EditorMoveDown,
     EditorDeleteBegin,  // 'd' — first key of 'dd'
     EditorDeleteLine,   // 'dd'
+    EditorDeleteWord,   // 'dw'
     EditorDeleteChar,   // 'x'
     EditorLineStart,    // '0'
     EditorWordForward,  // 'w'
@@ -122,6 +123,7 @@ pub fn editor_key_to_action(key: KeyEvent, mode: &EditorMode, pending_colon: boo
             } else if pending_d {
                 match key.code {
                     KeyCode::Char('d') => Action::EditorDeleteLine,
+                    KeyCode::Char('w') => Action::EditorDeleteWord,
                     _ => Action::EditorNormalMode, // any other key cancels
                 }
             } else {
