@@ -42,6 +42,7 @@ pub enum Action {
     EditorDeleteLine,   // 'dd'
     EditorDeleteChar,   // 'x'
     EditorLineStart,    // '0'
+    EditorWordForward,  // 'w'
     EditorAppend,       // 'a' — insert after cursor char
     EditorAppendEnd,    // 'A' — insert at end of line
     None,
@@ -133,6 +134,7 @@ pub fn editor_key_to_action(key: KeyEvent, mode: &EditorMode, pending_colon: boo
                     KeyCode::Char('k') | KeyCode::Up    => Action::EditorMoveUp,
                     KeyCode::Char('l') | KeyCode::Right => Action::EditorMoveRight,
                     KeyCode::Char('0') => Action::EditorLineStart,
+                    KeyCode::Char('w') => Action::EditorWordForward,
                     KeyCode::Char('x') => Action::EditorDeleteChar,
                     KeyCode::Char('d') => Action::EditorDeleteBegin,
                     KeyCode::Char('q') => Action::EditorAbort,

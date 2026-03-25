@@ -311,6 +311,7 @@ fn run_app(
                     | Action::EditorDeleteLine
                     | Action::EditorDeleteChar
                     | Action::EditorLineStart
+                    | Action::EditorWordForward
                     | Action::EditorAppend
                     | Action::EditorAppendEnd => {}
                 }
@@ -501,6 +502,29 @@ fn handle_editor_key(app: &mut App, key: crossterm::event::KeyEvent) {
         Action::EditorLineStart => {
             if let Some(state) = app.editor.as_mut() {
                 state.cursor_col = 0;
+                state.pending_d = false;
+            }
+        }
+        Action::EditorWordForward => {
+            if let Some(state) = app.editor.as_mut() {
+                let line = &state.lines[state.cursor_row];
+                let chars: Vec<char> = line.chars().collect();
+                let mut col = state.cursor_col;
+                // Skip current word (non-whitespace)
+                while col < chars.len() && !chars[col].is_whitespace() {
+                    col += 1;
+                }
+                // Skip whitespace
+                while col < chars.len() && chars[col].is_whitespace() {
+                    col += 1;
+                }
+                if col < chars.len() {
+                    state.cursor_col = col;
+                } else if state.cursor_row + 1 < state.lines.len() {
+                    // Move to start of next line
+                    state.cursor_row += 1;
+                    state.cursor_col = 0;
+                }
                 state.pending_d = false;
             }
         }
