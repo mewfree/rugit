@@ -40,6 +40,9 @@ impl EditorState {
             initial_message.lines().map(String::from).collect()
         };
         let mut textarea = TextArea::new(lines);
+        // Remove default block borders and cursor-line underline
+        textarea.set_block(ratatui::widgets::Block::default());
+        textarea.set_cursor_line_style(ratatui::style::Style::default());
         // Position cursor at end of first line (matching original behavior)
         textarea.input(crossterm::event::KeyEvent::new(
             crossterm::event::KeyCode::End,
