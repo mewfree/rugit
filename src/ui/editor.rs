@@ -38,8 +38,10 @@ pub fn render_editor(f: &mut Frame, area: Rect, state: &EditorState) {
         (comment_count + 1).min(inner.height as usize / 2) as u16
     };
 
+    let text_height = (state.textarea.lines().len() as u16).max(1);
+
     let inner_chunks = Layout::vertical([
-        Constraint::Min(1),
+        Constraint::Length(text_height),
         Constraint::Length(comments_height),
     ])
     .split(inner);
