@@ -7,8 +7,10 @@ pub struct Config {
     pub backend: Option<String>,
     /// Editor to use for commit messages (falls back to $EDITOR)
     pub editor: Option<String>,
-    /// Number of log entries to show
+    /// Number of log entries to show in the log buffer
     pub log_limit: usize,
+    /// Number of recent commits to show in the status buffer
+    pub recent_limit: usize,
 }
 
 impl Default for Config {
@@ -17,6 +19,7 @@ impl Default for Config {
             backend: None,
             editor: None,
             log_limit: 50,
+            recent_limit: 10,
         }
     }
 }

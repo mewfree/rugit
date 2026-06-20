@@ -66,4 +66,4 @@ Implement all Backend trait methods using =jj= subprocess calls.
 ** DONE Unpushed commits section in status buffer
 ** DONE Log buffer (=l=) with navigation
 ** DONE Help popup (=?=)
-** TODO Display more commits in log buffer (increase default count or add scroll/pagination)
+** DONE Display more commits in Recent commits (configurable via =recent_limit= in config.toml, default 10)

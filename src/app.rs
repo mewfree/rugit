@@ -133,7 +133,7 @@ pub struct App {
 impl App {
     pub fn new(backend: Box<dyn Backend>, config: Config) -> Result<Self> {
         let status = backend.status()?;
-        let recent_commits = backend.log(5).unwrap_or_default();
+        let recent_commits = backend.log(config.recent_limit).unwrap_or_default();
         let mut app = Self {
             backend,
             config,
@@ -302,7 +302,7 @@ impl App {
 
     pub fn refresh(&mut self) -> Result<()> {
         self.status = self.backend.status()?;
-        self.recent_commits = self.backend.log(5).unwrap_or_default();
+        self.recent_commits = self.backend.log(self.config.recent_limit).unwrap_or_default();
         self.rebuild_items();
         // Clamp cursor
         if !self.items.is_empty() && self.cursor >= self.items.len() {
@@ -359,7 +359,7 @@ impl App {
         self.diff_cache.remove(&unstaged_key);
 
         self.status = self.backend.status()?;
-        self.recent_commits = self.backend.log(5).unwrap_or_default();
+        self.recent_commits = self.backend.log(self.config.recent_limit).unwrap_or_default();
 
         let want_staged   = *destination == Section::Staged
             || self.expanded.contains(&staged_key);
@@ -769,7 +769,7 @@ impl App {
                         self.backend.discard_hunk(&file_path, hunk_index)?;
                         // Re-fetch the diff so remaining hunks stay visible
                         self.status = self.backend.status()?;
-                        self.recent_commits = self.backend.log(5).unwrap_or_default();
+                        self.recent_commits = self.backend.log(self.config.recent_limit).unwrap_or_default();
                         if self.status.unstaged.iter().any(|e| e.path == file_path) {
                             if let Ok(new_diff) = self.backend.diff_file(&file_path, false) {
                                 self.diff_cache.insert(key, new_diff);
