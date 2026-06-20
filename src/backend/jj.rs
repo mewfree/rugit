@@ -152,6 +152,26 @@ impl Backend for JjBackend {
         bail!("squash not supported for jj backend")
     }
 
+    fn stash(&self) -> Result<()> {
+        bail!("stash not supported for jj backend")
+    }
+
+    fn stash_pop(&self) -> Result<()> {
+        bail!("stash not supported for jj backend")
+    }
+
+    fn stash_apply(&self, _index: usize) -> Result<()> {
+        bail!("stash not supported for jj backend")
+    }
+
+    fn stash_drop(&self, _index: usize) -> Result<()> {
+        bail!("stash not supported for jj backend")
+    }
+
+    fn stash_list(&self) -> Result<Vec<super::StashInfo>> {
+        bail!("stash not supported for jj backend")
+    }
+
     fn show_commit(&self, hash: &str) -> Result<String> {
         self.run_jj(&["show", "--no-pager", hash])
     }

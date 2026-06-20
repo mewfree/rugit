@@ -54,6 +54,12 @@ pub struct CommitInfo {
     pub author: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct StashInfo {
+    pub index: usize,
+    pub summary: String,
+}
+
 pub trait Backend {
     fn repo_root(&self) -> &Path;
     fn kind_name(&self) -> &'static str;
@@ -76,6 +82,11 @@ pub trait Backend {
     fn discard_all_unstaged(&self) -> Result<()>;
     fn fixup_commit(&self, hash: &str) -> Result<()>;
     fn squash_commit(&self, hash: &str) -> Result<()>;
+    fn stash(&self) -> Result<()>;
+    fn stash_pop(&self) -> Result<()>;
+    fn stash_apply(&self, index: usize) -> Result<()>;
+    fn stash_drop(&self, index: usize) -> Result<()>;
+    fn stash_list(&self) -> Result<Vec<StashInfo>>;
 }
 
 #[derive(Debug, Clone, PartialEq, ValueEnum)]

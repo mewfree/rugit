@@ -7,7 +7,7 @@ use ratatui::{
 };
 
 use crate::app::{App, Section, StatusItem};
-use crate::backend::FileKind;
+use crate::backend::{FileKind, StashInfo};
 
 // Palette
 const COL_STAGED: Color = Color::LightGreen;
@@ -121,6 +121,20 @@ fn status_item_to_list_item(item: &StatusItem, in_visual: bool) -> ListItem<'sta
             ),
         ])),
 
+        StatusItem::StashHeader { count } => ListItem::new(Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                format!("Stashes ({})", count),
+                Style::new().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+            ),
+        ])),
+
+        StatusItem::StashEntry { info } => ListItem::new(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(format!("stash@{{{}}} ", info.index), Style::new().fg(Color::Magenta)),
+            Span::raw(stash_summary(info)),
+        ])),
+
         StatusItem::Spacer => ListItem::new(Line::from("")),
 
         StatusItem::RecentCommit { info } => ListItem::new(Line::from(vec![
@@ -135,6 +149,13 @@ fn status_item_to_list_item(item: &StatusItem, in_visual: bool) -> ListItem<'sta
     } else {
         list_item
     }
+}
+
+fn stash_summary(info: &StashInfo) -> String {
+    let prefix = format!("stash@{{{}}}: ", info.index);
+    info.summary.strip_prefix(&prefix)
+        .unwrap_or(&info.summary)
+        .to_string()
 }
 
 fn section_color(section: &Section) -> Color {

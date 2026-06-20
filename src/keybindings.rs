@@ -27,6 +27,12 @@ pub enum Action {
     Pull,
     DiscardFile,
     VisualMode,
+    StashBegin,   // 'z' — opens stash submenu
+    StashSave,    // 'z z'
+    StashPop,     // 'z p'
+    StashApply,   // 'z a'
+    StashDrop,    // 'z d'
+    StashList,    // 'z l'
     None,
 }
 
@@ -54,6 +60,14 @@ pub fn key_to_action(key: KeyEvent, pending: Option<KeyCode>) -> Action {
                 KeyCode::Char('f') => return Action::PushForce,
                 _ => return Action::None,
             },
+            KeyCode::Char('z') => match key.code {
+                KeyCode::Char('z') => return Action::StashSave,
+                KeyCode::Char('p') => return Action::StashPop,
+                KeyCode::Char('a') => return Action::StashApply,
+                KeyCode::Char('d') => return Action::StashDrop,
+                KeyCode::Char('l') => return Action::StashList,
+                _ => return Action::None,
+            },
             _ => {}
         }
     }
@@ -78,6 +92,7 @@ pub fn key_to_action(key: KeyEvent, pending: Option<KeyCode>) -> Action {
         KeyCode::Char('F') => Action::Pull,
         KeyCode::Char('x') => Action::DiscardFile,
         KeyCode::Char('V') => Action::VisualMode,
+        KeyCode::Char('z') => Action::StashBegin,
         _ => Action::None,
     }
 }

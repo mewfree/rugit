@@ -3,7 +3,7 @@ use anyhow::Result;
 use crossterm::event::KeyCode;
 use tui_textarea::TextArea;
 
-use crate::backend::{Backend, CommitInfo, FileEntry, FileKind, RepoStatus};
+use crate::backend::{Backend, CommitInfo, FileEntry, FileKind, RepoStatus, StashInfo};
 
 use crate::config::Config;
 
@@ -25,6 +25,11 @@ pub struct CommitPickerState {
     pub commits: Vec<CommitInfo>,
     pub cursor: usize,
     pub mode: FixupMode,
+}
+
+pub struct StashListState {
+    pub stashes: Vec<StashInfo>,
+    pub cursor: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -118,6 +123,12 @@ pub enum StatusItem {
     RecentCommit {
         info: CommitInfo,
     },
+    StashHeader {
+        count: usize,
+    },
+    StashEntry {
+        info: StashInfo,
+    },
     Spacer,
 }
 
@@ -141,12 +152,15 @@ pub struct App {
     /// Anchor position when visual mode is active (V key)
     pub visual_anchor: Option<usize>,
     pub commit_picker: Option<CommitPickerState>,
+    pub stash_list: Option<StashListState>,
+    pub stashes: Vec<StashInfo>,
 }
 
 impl App {
     pub fn new(backend: Box<dyn Backend>, config: Config) -> Result<Self> {
         let status = backend.status()?;
         let recent_commits = backend.log(config.recent_limit).unwrap_or_default();
+        let stashes = backend.stash_list().unwrap_or_default();
         let mut app = Self {
             backend,
             config,
@@ -165,6 +179,8 @@ impl App {
             editor: None,
             visual_anchor: None,
             commit_picker: None,
+            stash_list: None,
+            stashes,
         };
         app.rebuild_items();
         Ok(app)
@@ -289,6 +305,15 @@ impl App {
             }
         }
 
+        // Stash section
+        if !self.stashes.is_empty() {
+            if items.len() > 1 { items.push(StatusItem::Spacer); }
+            items.push(StatusItem::StashHeader { count: self.stashes.len() });
+            for info in &self.stashes {
+                items.push(StatusItem::StashEntry { info: info.clone() });
+            }
+        }
+
         // Unpushed commits section
         if !self.status.unpushed.is_empty() {
             if items.len() > 1 { items.push(StatusItem::Spacer); }
@@ -317,6 +342,7 @@ impl App {
     pub fn refresh(&mut self) -> Result<()> {
         self.status = self.backend.status()?;
         self.recent_commits = self.backend.log(self.config.recent_limit).unwrap_or_default();
+        self.stashes = self.backend.stash_list().unwrap_or_default();
         self.rebuild_items();
         // Clamp cursor
         if !self.items.is_empty() && self.cursor >= self.items.len() {

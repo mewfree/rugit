@@ -23,8 +23,8 @@ Full-screen diff view, navigable by hunk. Invoked from log buffer (=d= on select
 ** TODO Log buffer improvements
 Current log buffer is minimal. Add: commit graph rendering (=--graph=), author/date columns, filtering (=l f=), searching (=/=), pressing =Enter= to open diff viewer.
 
-** TODO Stash popup (=z=)
-=z z= stash, =z p= pop, =z a= apply, =z d= drop, =z l= list stashes. Needs stash list UI.
+** DONE Stash popup (=z=)
+=z z= stash, =z p= pop, =z a= apply, =z d= drop, =z l= list stashes. Stash list UI with navigate + apply/pop/drop actions.
 
 ** TODO Rebase/merge menus (=r=, =m=)
 =r r= rebase onto branch, =r e= rebase --continue, =r a= abort. =m m= merge, =m a= abort.

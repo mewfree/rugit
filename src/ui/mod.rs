@@ -78,6 +78,16 @@ pub fn render(f: &mut Frame, app: &mut App) {
         popup::render_push_popup(f, area);
     }
 
+    // Stash submenu popup
+    if app.pending_key == Some(KeyCode::Char('z')) {
+        popup::render_stash_popup(f, area);
+    }
+
+    // Stash list popup
+    if let Some(ref state) = app.stash_list {
+        popup::render_stash_list(f, area, state);
+    }
+
     // Footer
     let footer = Paragraph::new(footer_text)
         .style(Style::new().bg(Color::Rgb(20, 30, 70)).fg(Color::White));
@@ -144,6 +154,8 @@ fn build_footer(app: &App) -> Line<'static> {
             key("[Tab]"), Span::raw("expand"),
             sep(),
             key("[c]"), Span::raw("ommit"),
+            sep(),
+            key("[z]"), Span::raw("stash"),
             sep(),
             key("[p]"), Span::raw("ush"),
             sep(),

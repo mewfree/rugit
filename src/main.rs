@@ -14,7 +14,7 @@ mod keybindings;
 mod backend;
 mod ui;
 
-use app::{ActiveBuffer, App, CommitPickerState, EditorState, FixupMode};
+use app::{ActiveBuffer, App, CommitPickerState, EditorState, FixupMode, StashListState};
 use backend::{detect_backend, BackendKind};
 use config::Config;
 use keybindings::{key_to_action, Action};
@@ -95,6 +95,61 @@ fn run_app(
             Event::Key(key) => {
                 // Only process key press events (ignore release/repeat on some platforms)
                 if key.kind != KeyEventKind::Press {
+                    continue;
+                }
+
+                // Handle stash list popup
+                if app.stash_list.is_some() {
+                    match key.code {
+                        KeyCode::Esc => {
+                            app.stash_list = None;
+                            app.status_msg = None;
+                        }
+                        KeyCode::Char('j') | KeyCode::Down => {
+                            if let Some(ref mut sl) = app.stash_list {
+                                if sl.cursor + 1 < sl.stashes.len() {
+                                    sl.cursor += 1;
+                                }
+                            }
+                        }
+                        KeyCode::Char('k') | KeyCode::Up => {
+                            if let Some(ref mut sl) = app.stash_list {
+                                if sl.cursor > 0 {
+                                    sl.cursor -= 1;
+                                }
+                            }
+                        }
+                        KeyCode::Char('a') => {
+                            if let Some(sl) = app.stash_list.take() {
+                                match app.backend.stash_apply(sl.stashes[sl.cursor].index) {
+                                    Ok(_) => { let _ = app.refresh(); app.status_msg = Some("Stash applied".to_string()); }
+                                    Err(e) => { app.status_msg = Some(format!("Error: {}", e)); }
+                                }
+                            }
+                        }
+                        KeyCode::Char('p') => {
+                            if let Some(sl) = app.stash_list.take() {
+                                match app.backend.stash_apply(sl.stashes[sl.cursor].index) {
+                                    Ok(_) => {
+                                        let idx = sl.stashes[sl.cursor].index;
+                                        let _ = app.backend.stash_drop(idx);
+                                        let _ = app.refresh();
+                                        app.status_msg = Some("Stash popped".to_string());
+                                    }
+                                    Err(e) => { app.status_msg = Some(format!("Error: {}", e)); }
+                                }
+                            }
+                        }
+                        KeyCode::Char('d') => {
+                            if let Some(sl) = app.stash_list.take() {
+                                match app.backend.stash_drop(sl.stashes[sl.cursor].index) {
+                                    Ok(_) => { let _ = app.refresh(); app.status_msg = Some("Stash dropped".to_string()); }
+                                    Err(e) => { app.status_msg = Some(format!("Error: {}", e)); }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
                     continue;
                 }
 
@@ -395,6 +450,52 @@ fn run_app(
                         app.visual_anchor = Some(app.cursor);
                         app.status_msg = Some("-- VISUAL --".to_string());
                         app.pending_key = None;
+                    }
+                    Action::StashBegin => {
+                        app.pending_key = Some(crossterm::event::KeyCode::Char('z'));
+                        app.status_msg = Some("z-".to_string());
+                    }
+                    Action::StashSave => {
+                        app.pending_key = None;
+                        match app.backend.stash() {
+                            Ok(_) => { let _ = app.refresh(); app.status_msg = Some("Stashed changes".to_string()); }
+                            Err(e) => { app.status_msg = Some(format!("Stash failed: {}", first_line(&e.to_string()))); }
+                        }
+                    }
+                    Action::StashPop => {
+                        app.pending_key = None;
+                        match app.backend.stash_pop() {
+                            Ok(_) => { let _ = app.refresh(); app.status_msg = Some("Popped stash".to_string()); }
+                            Err(e) => { app.status_msg = Some(format!("Stash pop failed: {}", first_line(&e.to_string()))); }
+                        }
+                    }
+                    Action::StashApply => {
+                        app.pending_key = None;
+                        match app.backend.stash_apply(0) {
+                            Ok(_) => { let _ = app.refresh(); app.status_msg = Some("Applied stash".to_string()); }
+                            Err(e) => { app.status_msg = Some(format!("Stash apply failed: {}", first_line(&e.to_string()))); }
+                        }
+                    }
+                    Action::StashDrop => {
+                        app.pending_key = None;
+                        match app.backend.stash_drop(0) {
+                            Ok(_) => { let _ = app.refresh(); app.status_msg = Some("Dropped stash".to_string()); }
+                            Err(e) => { app.status_msg = Some(format!("Stash drop failed: {}", first_line(&e.to_string()))); }
+                        }
+                    }
+                    Action::StashList => {
+                        app.pending_key = None;
+                        match app.backend.stash_list() {
+                            Ok(stashes) if stashes.is_empty() => {
+                                app.status_msg = Some("No stashes".to_string());
+                            }
+                            Ok(stashes) => {
+                                app.stash_list = Some(StashListState { stashes, cursor: 0 });
+                            }
+                            Err(e) => {
+                                app.status_msg = Some(format!("Error: {}", e));
+                            }
+                        }
                     }
                     Action::None => {
                         // Clear pending key if it doesn't form a valid chord

@@ -5,7 +5,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
     Frame,
 };
-use crate::app::{CommitPickerState, FixupMode};
+use crate::app::{CommitPickerState, FixupMode, StashListState};
 
 pub fn render_help(f: &mut Frame, area: Rect) {
     let popup_area = centered_rect(60, 90, area);
@@ -41,6 +41,14 @@ pub fn render_help(f: &mut Frame, area: Rect) {
         key("  c a         ", "Amend last commit"),
         key("  c F         ", "Instant fixup into a commit"),
         key("  c s         ", "Instant squash into a commit"),
+        Line::from(""),
+        section("  Stash"),
+        key("  z           ", "Open stash menu"),
+        key("  z z         ", "Stash changes"),
+        key("  z p         ", "Pop latest stash"),
+        key("  z a         ", "Apply latest stash"),
+        key("  z d         ", "Drop latest stash"),
+        key("  z l         ", "List stashes"),
         Line::from(""),
         section("  Remotes"),
         key("  p           ", "Open push menu"),
@@ -233,6 +241,94 @@ pub fn render_push_popup(f: &mut Frame, area: Rect) {
                 .title_alignment(Alignment::Center)
                 .borders(Borders::ALL)
                 .border_style(Style::new().fg(Color::Cyan)),
+        )
+        .alignment(Alignment::Left);
+
+    f.render_widget(paragraph, popup_area);
+}
+
+pub fn render_stash_popup(f: &mut Frame, area: Rect) {
+    let popup_area = centered_rect(50, 40, area);
+    f.render_widget(Clear, popup_area);
+
+    let lines = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  z  ", Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::raw("Stash changes"),
+        ]),
+        Line::from(vec![
+            Span::styled("  p  ", Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::raw("Pop latest stash"),
+        ]),
+        Line::from(vec![
+            Span::styled("  a  ", Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::raw("Apply latest stash"),
+        ]),
+        Line::from(vec![
+            Span::styled("  d  ", Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::raw("Drop latest stash"),
+        ]),
+        Line::from(vec![
+            Span::styled("  l  ", Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::raw("List stashes"),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Esc / any other key: cancel",
+            Style::new().fg(Color::DarkGray),
+        )),
+    ];
+
+    let paragraph = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title(" Stash ")
+                .title_alignment(Alignment::Center)
+                .borders(Borders::ALL)
+                .border_style(Style::new().fg(Color::Magenta)),
+        )
+        .alignment(Alignment::Left);
+
+    f.render_widget(paragraph, popup_area);
+}
+
+pub fn render_stash_list(f: &mut Frame, area: Rect, state: &StashListState) {
+    let popup_area = centered_rect(70, 60, area);
+    f.render_widget(Clear, popup_area);
+
+    let inner_height = popup_area.height.saturating_sub(4) as usize;
+    let visible_start = if state.cursor >= inner_height {
+        state.cursor - inner_height + 1
+    } else {
+        0
+    };
+
+    let mut lines: Vec<Line> = vec![Line::from("")];
+    for (i, stash) in state.stashes.iter().enumerate().skip(visible_start).take(inner_height) {
+        let selected = i == state.cursor;
+        let prefix = if selected { "> " } else { "  " };
+        let style = if selected {
+            Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        } else {
+            Style::new()
+        };
+        lines.push(Line::from(Span::styled(format!("{}{}", prefix, stash.summary), style)));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  j/k: navigate   a: apply   p: pop   d: drop   Esc: close",
+        Style::new().fg(Color::DarkGray),
+    )));
+
+    let paragraph = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title(" Stashes ")
+                .title_alignment(Alignment::Center)
+                .borders(Borders::ALL)
+                .border_style(Style::new().fg(Color::Magenta)),
         )
         .alignment(Alignment::Left);
 

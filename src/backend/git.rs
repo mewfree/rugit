@@ -477,5 +477,70 @@ impl Backend for GitBackend {
             anyhow::bail!("{}", String::from_utf8_lossy(&out.stderr).trim())
         }
     }
+
+    fn stash(&self) -> Result<()> {
+        let out = std::process::Command::new("git")
+            .args(["stash", "push"])
+            .current_dir(&self.root)
+            .output()?;
+        if !out.status.success() {
+            anyhow::bail!("{}", String::from_utf8_lossy(&out.stderr).trim());
+        }
+        Ok(())
+    }
+
+    fn stash_pop(&self) -> Result<()> {
+        let out = std::process::Command::new("git")
+            .args(["stash", "pop"])
+            .current_dir(&self.root)
+            .output()?;
+        if !out.status.success() {
+            anyhow::bail!("{}", String::from_utf8_lossy(&out.stderr).trim());
+        }
+        Ok(())
+    }
+
+    fn stash_apply(&self, index: usize) -> Result<()> {
+        let stash_ref = format!("stash@{{{}}}", index);
+        let out = std::process::Command::new("git")
+            .args(["stash", "apply", &stash_ref])
+            .current_dir(&self.root)
+            .output()?;
+        if !out.status.success() {
+            anyhow::bail!("{}", String::from_utf8_lossy(&out.stderr).trim());
+        }
+        Ok(())
+    }
+
+    fn stash_drop(&self, index: usize) -> Result<()> {
+        let stash_ref = format!("stash@{{{}}}", index);
+        let out = std::process::Command::new("git")
+            .args(["stash", "drop", &stash_ref])
+            .current_dir(&self.root)
+            .output()?;
+        if !out.status.success() {
+            anyhow::bail!("{}", String::from_utf8_lossy(&out.stderr).trim());
+        }
+        Ok(())
+    }
+
+    fn stash_list(&self) -> Result<Vec<super::StashInfo>> {
+        let out = std::process::Command::new("git")
+            .args(["stash", "list", "--format=%gd: %s"])
+            .current_dir(&self.root)
+            .output()?;
+        if !out.status.success() {
+            anyhow::bail!("{}", String::from_utf8_lossy(&out.stderr).trim());
+        }
+        let text = String::from_utf8_lossy(&out.stdout);
+        let mut stashes = Vec::new();
+        for (i, line) in text.lines().enumerate() {
+            stashes.push(super::StashInfo {
+                index: i,
+                summary: line.to_string(),
+            });
+        }
+        Ok(stashes)
+    }
 }
 
