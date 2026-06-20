@@ -81,20 +81,22 @@ or two keystrokes away.
 
 ** Status buffer
 
-| Key     | Action                      |
-|---------+-----------------------------|
-| =s=     | Stage file or hunk at point |
-| =u=     | Unstage file or hunk        |
-| =S=     | Stage all unstaged changes  |
-| =U=     | Unstage all staged changes  |
-| =c=     | Open commit menu            |
-| =c c=   | Commit staged changes       |
-| =c a=   | Amend last commit           |
-| =p=     | Open push menu              |
-| =p p=   | Push to upstream            |
-| =p f=   | Force-push (with-lease)     |
-| =F=     | Pull from upstream          |
-| =Enter= | Preview commit at point     |
+| Key     | Action                               |
+|---------+--------------------------------------|
+| =s=     | Stage file, hunk, or line at point   |
+| =u=     | Unstage file, hunk, or line          |
+| =V=     | Enter visual mode (multi-line select) |
+| =S=     | Stage all unstaged changes           |
+| =U=     | Unstage all staged changes           |
+| =x=     | Discard file or hunk at point        |
+| =c=     | Open commit menu                     |
+| =c c=   | Commit staged changes                |
+| =c a=   | Amend last commit                    |
+| =p=     | Open push menu                       |
+| =p p=   | Push to upstream                     |
+| =p f=   | Force-push (with-lease)              |
+| =F=     | Pull from upstream                   |
+| =Enter= | Preview commit at point              |
 
 ** Log buffer
 

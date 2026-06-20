@@ -136,6 +136,13 @@ fn run_app(
                     continue;
                 }
 
+                // Esc exits visual mode if active
+                if key.code == KeyCode::Esc && app.visual_anchor.is_some() {
+                    app.visual_anchor = None;
+                    app.status_msg = None;
+                    continue;
+                }
+
                 // Clear status message on any keypress
                 app.status_msg = None;
 
@@ -165,13 +172,21 @@ fn run_app(
                         app.pending_key = None;
                     }
                     Action::StageFile => {
-                        if let Err(e) = app.stage_at_cursor() {
+                        if app.visual_anchor.is_some() {
+                            if let Err(e) = app.stage_visual_selection() {
+                                app.status_msg = Some(format!("Error: {}", e));
+                            }
+                        } else if let Err(e) = app.stage_at_cursor() {
                             app.status_msg = Some(format!("Error: {}", e));
                         }
                         app.pending_key = None;
                     }
                     Action::UnstageFile => {
-                        if let Err(e) = app.unstage_at_cursor() {
+                        if app.visual_anchor.is_some() {
+                            if let Err(e) = app.unstage_visual_selection() {
+                                app.status_msg = Some(format!("Error: {}", e));
+                            }
+                        } else if let Err(e) = app.unstage_at_cursor() {
                             app.status_msg = Some(format!("Error: {}", e));
                         }
                         app.pending_key = None;
@@ -290,6 +305,11 @@ fn run_app(
                             Err(e) => app.status_msg = Some(format!("Pull failed: {}", first_line(&e.to_string()))),
                         }
                         let _ = app.refresh();
+                    }
+                    Action::VisualMode => {
+                        app.visual_anchor = Some(app.cursor);
+                        app.status_msg = Some("-- VISUAL --".to_string());
+                        app.pending_key = None;
                     }
                     Action::None => {
                         // Clear pending key if it doesn't form a valid chord

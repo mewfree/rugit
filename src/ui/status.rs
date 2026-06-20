@@ -18,7 +18,14 @@ const COL_HASH: Color = Color::Cyan;
 const COL_DIM: Color = Color::DarkGray;
 
 pub fn render_status(f: &mut Frame, app: &mut App, area: Rect) {
-    let items: Vec<ListItem> = app.items.iter().map(status_item_to_list_item).collect();
+    let visual_range = app.visual_anchor.map(|anchor| {
+        if anchor <= app.cursor { (anchor, app.cursor) } else { (app.cursor, anchor) }
+    });
+
+    let items: Vec<ListItem> = app.items.iter().enumerate().map(|(i, item)| {
+        let in_visual = visual_range.map(|(s, e)| i >= s && i <= e && i != app.cursor).unwrap_or(false);
+        status_item_to_list_item(item, in_visual)
+    }).collect();
 
     let list = List::new(items).highlight_style(
         Style::new()
@@ -43,8 +50,10 @@ pub fn render_status(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_stateful_widget(list, area, &mut state);
 }
 
-fn status_item_to_list_item(item: &StatusItem) -> ListItem<'static> {
-    match item {
+fn status_item_to_list_item(item: &StatusItem, in_visual: bool) -> ListItem<'static> {
+    let visual_bg = Color::Rgb(60, 40, 100);
+
+    let list_item = match item {
         StatusItem::Header {
             label,
             count,
@@ -119,6 +128,12 @@ fn status_item_to_list_item(item: &StatusItem) -> ListItem<'static> {
             Span::styled(format!("{} ", info.short_hash), Style::new().fg(COL_HASH)),
             Span::raw(info.summary.clone()),
         ])),
+    };
+
+    if in_visual {
+        list_item.style(Style::new().bg(visual_bg))
+    } else {
+        list_item
     }
 }
 

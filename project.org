@@ -5,6 +5,9 @@
 ** DONE Line-level staging
 Stage/unstage individual lines within a hunk (visual selection or cursor-based). The UX model: expand a hunk, move cursor to a line, press =s= to stage just that line. Requires splitting hunks in the backend and applying partial patches.
 
+** DONE Visual-mode multi-line staging (=V=)
+Press =V= to enter visual mode, move with =j=/=k= to extend the selection, then =s= or =u= to stage/unstage all selected =+=/=-= lines. Multiple hunks per file are handled by building one patch per hunk from the cached diff. =Esc= exits visual mode.
+
 ** TODO Branch management popup (=b=)
 Magit-style transient: =b b= checkout, =b c= create+checkout, =b d= delete, =b r= rename. Needs a branch list picker UI.
 

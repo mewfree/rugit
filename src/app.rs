@@ -126,6 +126,8 @@ pub struct App {
     /// Flat list of visible status items (rebuilt on refresh)
     pub items: Vec<StatusItem>,
     pub editor: Option<EditorState>,
+    /// Anchor position when visual mode is active (V key)
+    pub visual_anchor: Option<usize>,
 }
 
 impl App {
@@ -148,6 +150,7 @@ impl App {
             recent_commits,
             items: Vec::new(),
             editor: None,
+            visual_anchor: None,
         };
         app.rebuild_items();
         Ok(app)
@@ -408,14 +411,14 @@ impl App {
         Some((old_start, new_start))
     }
 
-    /// Build a minimal patch for a single `+`/`-` line within a hunk.
+    /// Build a minimal patch for one or more `+`/`-` lines within a hunk.
     ///
     /// `reverse=false` (staging): the INDEX contains `-` lines (they haven't been removed yet)
     /// and does NOT contain `+` lines. So `-` lines become context, `+` lines are dropped.
     ///
     /// `reverse=true` (unstaging): the INDEX contains `+` lines (they were staged) and does NOT
     /// contain `-` lines (they were staged for removal). So `+` lines become context, `-` dropped.
-    fn extract_line_patch(diff: &str, hunk_index: usize, line_in_hunk: usize, reverse: bool) -> Option<String> {
+    fn extract_lines_patch(diff: &str, hunk_index: usize, line_indices: &HashSet<usize>, reverse: bool) -> Option<String> {
         let lines: Vec<&str> = diff.lines().collect();
         let first_hunk = lines.iter().position(|l| l.starts_with("@@"))?;
         let file_header = lines[..first_hunk].join("\n");
@@ -431,31 +434,28 @@ impl App {
 
         let (old_start, new_start) = Self::parse_hunk_starts(lines[hunk_start])?;
 
-        let target_char = hunk_body.get(line_in_hunk)?.chars().next()?;
-        if target_char != '+' && target_char != '-' {
-            return None;
-        }
-
         let mut new_body: Vec<String> = Vec::new();
+        let mut has_selected = false;
         for (i, &body_line) in hunk_body.iter().enumerate() {
             let ch = body_line.chars().next().unwrap_or(' ');
-            if i == line_in_hunk {
+            if line_indices.contains(&i) && (ch == '+' || ch == '-') {
                 new_body.push(body_line.to_string());
+                has_selected = true;
             } else if ch == '+' {
                 if reverse {
-                    // Unstaging: `+` lines ARE in INDEX, use as context
                     new_body.push(format!(" {}", &body_line[1..]));
                 }
-                // Staging: `+` lines are NOT in INDEX, drop them
             } else if ch == '-' {
                 if !reverse {
-                    // Staging: `-` lines ARE in INDEX (not yet removed), use as context
                     new_body.push(format!(" {}", &body_line[1..]));
                 }
-                // Unstaging: `-` lines are NOT in INDEX, drop them
             } else {
                 new_body.push(body_line.to_string());
             }
+        }
+
+        if !has_selected {
+            return None;
         }
 
         let old_count = new_body.iter()
@@ -471,6 +471,12 @@ impl App {
         patch.push_str(&new_body.join("\n"));
         patch.push('\n');
         Some(patch)
+    }
+
+    fn extract_line_patch(diff: &str, hunk_index: usize, line_in_hunk: usize, reverse: bool) -> Option<String> {
+        let mut set = HashSet::new();
+        set.insert(line_in_hunk);
+        Self::extract_lines_patch(diff, hunk_index, &set, reverse)
     }
 
     /// Extract a single hunk from a diff string as a complete patch (file header + hunk body).
@@ -616,6 +622,92 @@ impl App {
                 _ => {}
             }
         }
+        Ok(())
+    }
+
+    /// Stage all `+`/`-` DiffLines in the visual selection range.
+    pub fn stage_visual_selection(&mut self) -> Result<()> {
+        let anchor = match self.visual_anchor.take() {
+            Some(a) => a,
+            None => return Ok(()),
+        };
+        let (start, end) = if anchor <= self.cursor { (anchor, self.cursor) } else { (self.cursor, anchor) };
+
+        // Collect selected unstaged diff lines grouped by (file_path, hunk_index)
+        let mut groups: HashMap<(String, usize), HashSet<usize>> = HashMap::new();
+        let mut any_file: Option<String> = None;
+
+        for i in start..=end {
+            if let Some(StatusItem::DiffLine { line, file_path, section, hunk_index, line_in_hunk }) = self.items.get(i) {
+                if *section == Section::Unstaged && (line.starts_with('+') || line.starts_with('-')) {
+                    groups.entry((file_path.clone(), *hunk_index)).or_default().insert(*line_in_hunk);
+                    any_file = Some(file_path.clone());
+                }
+            }
+        }
+
+        if groups.is_empty() {
+            return Ok(());
+        }
+
+        // Apply patches per (file, hunk) in order, reusing cached diff
+        let mut total = 0usize;
+        for ((file_path, hunk_index), line_indices) in &groups {
+            let cache_key = format!("unstaged:{}", file_path);
+            if let Some(diff) = self.diff_cache.get(&cache_key).cloned() {
+                if let Some(patch) = Self::extract_lines_patch(&diff, *hunk_index, line_indices, false) {
+                    self.backend.apply_patch(&patch, false)?;
+                    total += line_indices.len();
+                }
+            }
+        }
+
+        if let Some(path) = any_file {
+            self.refresh_file_diffs(&path, &Section::Staged)?;
+        }
+        self.status_msg = Some(format!("Staged {} line(s)", total));
+        Ok(())
+    }
+
+    /// Unstage all `+`/`-` DiffLines in the visual selection range.
+    pub fn unstage_visual_selection(&mut self) -> Result<()> {
+        let anchor = match self.visual_anchor.take() {
+            Some(a) => a,
+            None => return Ok(()),
+        };
+        let (start, end) = if anchor <= self.cursor { (anchor, self.cursor) } else { (self.cursor, anchor) };
+
+        let mut groups: HashMap<(String, usize), HashSet<usize>> = HashMap::new();
+        let mut any_file: Option<String> = None;
+
+        for i in start..=end {
+            if let Some(StatusItem::DiffLine { line, file_path, section, hunk_index, line_in_hunk }) = self.items.get(i) {
+                if *section == Section::Staged && (line.starts_with('+') || line.starts_with('-')) {
+                    groups.entry((file_path.clone(), *hunk_index)).or_default().insert(*line_in_hunk);
+                    any_file = Some(file_path.clone());
+                }
+            }
+        }
+
+        if groups.is_empty() {
+            return Ok(());
+        }
+
+        let mut total = 0usize;
+        for ((file_path, hunk_index), line_indices) in &groups {
+            let cache_key = format!("staged:{}", file_path);
+            if let Some(diff) = self.diff_cache.get(&cache_key).cloned() {
+                if let Some(patch) = Self::extract_lines_patch(&diff, *hunk_index, line_indices, true) {
+                    self.backend.apply_patch(&patch, true)?;
+                    total += line_indices.len();
+                }
+            }
+        }
+
+        if let Some(path) = any_file {
+            self.refresh_file_diffs(&path, &Section::Unstaged)?;
+        }
+        self.status_msg = Some(format!("Unstaged {} line(s)", total));
         Ok(())
     }
 
