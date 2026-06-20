@@ -144,6 +144,14 @@ impl Backend for JjBackend {
         bail!("jj write ops not yet implemented")
     }
 
+    fn fixup_commit(&self, _hash: &str) -> Result<()> {
+        bail!("fixup not supported for jj backend")
+    }
+
+    fn squash_commit(&self, _hash: &str) -> Result<()> {
+        bail!("squash not supported for jj backend")
+    }
+
     fn show_commit(&self, hash: &str) -> Result<String> {
         self.run_jj(&["show", "--no-pager", hash])
     }

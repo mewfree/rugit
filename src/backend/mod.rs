@@ -74,6 +74,8 @@ pub trait Backend {
     fn apply_patch(&self, patch: &str, reverse: bool) -> Result<()>;
     fn discard_hunk(&self, path: &str, hunk_index: usize) -> Result<()>;
     fn discard_all_unstaged(&self) -> Result<()>;
+    fn fixup_commit(&self, hash: &str) -> Result<()>;
+    fn squash_commit(&self, hash: &str) -> Result<()>;
 }
 
 #[derive(Debug, Clone, PartialEq, ValueEnum)]

@@ -5,6 +5,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
     Frame,
 };
+use crate::app::{CommitPickerState, FixupMode};
 
 pub fn render_help(f: &mut Frame, area: Rect) {
     let popup_area = centered_rect(60, 90, area);
@@ -38,6 +39,8 @@ pub fn render_help(f: &mut Frame, area: Rect) {
         key("  c           ", "Open commit menu"),
         key("  c c         ", "Commit staged changes"),
         key("  c a         ", "Amend last commit"),
+        key("  c F         ", "Instant fixup into a commit"),
+        key("  c s         ", "Instant squash into a commit"),
         Line::from(""),
         section("  Remotes"),
         key("  p           ", "Open push menu"),
@@ -104,8 +107,64 @@ pub fn render_commit_preview(f: &mut Frame, area: Rect, title: &str, content: &s
     f.render_widget(paragraph, popup_area);
 }
 
+pub fn render_commit_picker(f: &mut Frame, area: Rect, state: &CommitPickerState) {
+    let popup_area = centered_rect(70, 60, area);
+    f.render_widget(Clear, popup_area);
+
+    let title = match state.mode {
+        FixupMode::Fixup  => " Fixup: select target commit ",
+        FixupMode::Squash => " Squash: select target commit ",
+    };
+
+    let inner_height = popup_area.height.saturating_sub(4) as usize; // border + hint line
+    let visible_start = if state.cursor >= inner_height {
+        state.cursor - inner_height + 1
+    } else {
+        0
+    };
+
+    let mut lines: Vec<Line> = vec![Line::from("")];
+    for (i, commit) in state.commits.iter().enumerate().skip(visible_start).take(inner_height) {
+        let selected = i == state.cursor;
+        let prefix = if selected { "> " } else { "  " };
+        let hash_style = if selected {
+            Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        } else {
+            Style::new().fg(Color::DarkGray)
+        };
+        let msg_style = if selected {
+            Style::new().fg(Color::White).add_modifier(Modifier::BOLD)
+        } else {
+            Style::new()
+        };
+        lines.push(Line::from(vec![
+            Span::raw(prefix),
+            Span::styled(format!("{} ", commit.short_hash), hash_style),
+            Span::styled(commit.summary.clone(), msg_style),
+        ]));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  j/k: navigate   Enter: confirm   Esc: cancel",
+        Style::new().fg(Color::DarkGray),
+    )));
+
+    let paragraph = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title(title)
+                .title_alignment(Alignment::Center)
+                .borders(Borders::ALL)
+                .border_style(Style::new().fg(Color::Yellow)),
+        )
+        .alignment(Alignment::Left);
+
+    f.render_widget(paragraph, popup_area);
+}
+
 pub fn render_commit_popup(f: &mut Frame, area: Rect) {
-    let popup_area = centered_rect(50, 30, area);
+    let popup_area = centered_rect(50, 40, area);
     f.render_widget(Clear, popup_area);
 
     let lines = vec![
@@ -117,6 +176,14 @@ pub fn render_commit_popup(f: &mut Frame, area: Rect) {
         Line::from(vec![
             Span::styled("  a  ", Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
             Span::raw("Amend"),
+        ]),
+        Line::from(vec![
+            Span::styled("  F  ", Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::raw("Instant fixup"),
+        ]),
+        Line::from(vec![
+            Span::styled("  s  ", Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::raw("Instant squash"),
         ]),
         Line::from(""),
         Line::from(Span::styled(

@@ -18,6 +18,8 @@ pub enum Action {
     CommitBegin,  // first 'c' of 'c c'
     CommitConfirm, // second 'c'
     CommitAmendConfirm, // 'a' after 'c'
+    FixupPick,    // 'c F' — open commit picker for fixup
+    SquashPick,   // 'c s' — open commit picker for squash
     Enter,
     PushBegin,    // 'P' — opens push submenu
     Push,         // 'P p'
@@ -43,6 +45,8 @@ pub fn key_to_action(key: KeyEvent, pending: Option<KeyCode>) -> Action {
             KeyCode::Char('c') => match key.code {
                 KeyCode::Char('c') => return Action::CommitConfirm,
                 KeyCode::Char('a') => return Action::CommitAmendConfirm,
+                KeyCode::Char('F') => return Action::FixupPick,
+                KeyCode::Char('s') => return Action::SquashPick,
                 _ => return Action::None,
             },
             KeyCode::Char('p') => match key.code {

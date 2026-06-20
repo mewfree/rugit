@@ -15,6 +15,18 @@ pub enum ActiveBuffer {
     Editor,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum FixupMode {
+    Fixup,
+    Squash,
+}
+
+pub struct CommitPickerState {
+    pub commits: Vec<CommitInfo>,
+    pub cursor: usize,
+    pub mode: FixupMode,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum EditorMode {
     Normal,
@@ -128,6 +140,7 @@ pub struct App {
     pub editor: Option<EditorState>,
     /// Anchor position when visual mode is active (V key)
     pub visual_anchor: Option<usize>,
+    pub commit_picker: Option<CommitPickerState>,
 }
 
 impl App {
@@ -151,6 +164,7 @@ impl App {
             items: Vec::new(),
             editor: None,
             visual_anchor: None,
+            commit_picker: None,
         };
         app.rebuild_items();
         Ok(app)

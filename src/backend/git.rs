@@ -442,6 +442,30 @@ impl Backend for GitBackend {
         Ok(())
     }
 
+    fn fixup_commit(&self, hash: &str) -> Result<()> {
+        let out = std::process::Command::new("git")
+            .args(["commit", &format!("--fixup={}", hash)])
+            .current_dir(&self.root)
+            .output()?;
+        if !out.status.success() {
+            let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            anyhow::bail!("{}", msg);
+        }
+        Ok(())
+    }
+
+    fn squash_commit(&self, hash: &str) -> Result<()> {
+        let out = std::process::Command::new("git")
+            .args(["commit", &format!("--squash={}", hash)])
+            .current_dir(&self.root)
+            .output()?;
+        if !out.status.success() {
+            let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            anyhow::bail!("{}", msg);
+        }
+        Ok(())
+    }
+
     fn show_commit(&self, hash: &str) -> Result<String> {
         let out = std::process::Command::new("git")
             .args(["show", "--stat", "-p", "--color=never", hash])

@@ -14,7 +14,7 @@ mod keybindings;
 mod backend;
 mod ui;
 
-use app::{ActiveBuffer, App, EditorState};
+use app::{ActiveBuffer, App, CommitPickerState, EditorState, FixupMode};
 use backend::{detect_backend, BackendKind};
 use config::Config;
 use keybindings::{key_to_action, Action};
@@ -95,6 +95,55 @@ fn run_app(
             Event::Key(key) => {
                 // Only process key press events (ignore release/repeat on some platforms)
                 if key.kind != KeyEventKind::Press {
+                    continue;
+                }
+
+                // Handle commit picker popup (fixup/squash)
+                if app.commit_picker.is_some() {
+                    match key.code {
+                        KeyCode::Esc => {
+                            app.commit_picker = None;
+                            app.status_msg = None;
+                        }
+                        KeyCode::Char('j') | KeyCode::Down => {
+                            if let Some(ref mut picker) = app.commit_picker {
+                                if picker.cursor + 1 < picker.commits.len() {
+                                    picker.cursor += 1;
+                                }
+                            }
+                        }
+                        KeyCode::Char('k') | KeyCode::Up => {
+                            if let Some(ref mut picker) = app.commit_picker {
+                                if picker.cursor > 0 {
+                                    picker.cursor -= 1;
+                                }
+                            }
+                        }
+                        KeyCode::Enter => {
+                            if let Some(picker) = app.commit_picker.take() {
+                                if let Some(commit) = picker.commits.get(picker.cursor) {
+                                    let hash = commit.short_hash.clone();
+                                    let result = match picker.mode {
+                                        FixupMode::Fixup  => app.backend.fixup_commit(&hash),
+                                        FixupMode::Squash => app.backend.squash_commit(&hash),
+                                    };
+                                    match result {
+                                        Ok(_) => {
+                                            let _ = app.refresh();
+                                            app.status_msg = Some(match picker.mode {
+                                                FixupMode::Fixup  => format!("Fixup commit created targeting {}", hash),
+                                                FixupMode::Squash => format!("Squash commit created targeting {}", hash),
+                                            });
+                                        }
+                                        Err(e) => {
+                                            app.status_msg = Some(format!("Error: {}", e));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
                     continue;
                 }
 
@@ -270,6 +319,42 @@ fn run_app(
                         app.pending_key = None;
                         if let Err(e) = do_commit_amend(app) {
                             app.status_msg = Some(format!("Amend error: {}", e));
+                        }
+                    }
+                    Action::FixupPick => {
+                        app.pending_key = None;
+                        match app.backend.log(app.config.log_limit) {
+                            Ok(commits) if !commits.is_empty() => {
+                                app.commit_picker = Some(CommitPickerState {
+                                    commits,
+                                    cursor: 0,
+                                    mode: FixupMode::Fixup,
+                                });
+                            }
+                            Ok(_) => {
+                                app.status_msg = Some("No commits to fixup into".to_string());
+                            }
+                            Err(e) => {
+                                app.status_msg = Some(format!("Error loading commits: {}", e));
+                            }
+                        }
+                    }
+                    Action::SquashPick => {
+                        app.pending_key = None;
+                        match app.backend.log(app.config.log_limit) {
+                            Ok(commits) if !commits.is_empty() => {
+                                app.commit_picker = Some(CommitPickerState {
+                                    commits,
+                                    cursor: 0,
+                                    mode: FixupMode::Squash,
+                                });
+                            }
+                            Ok(_) => {
+                                app.status_msg = Some("No commits to squash into".to_string());
+                            }
+                            Err(e) => {
+                                app.status_msg = Some(format!("Error loading commits: {}", e));
+                            }
                         }
                     }
                     Action::PushBegin => {

@@ -64,8 +64,13 @@ pub fn render(f: &mut Frame, app: &mut App) {
     }
 
     // Commit submenu popup
-    if app.pending_key == Some(KeyCode::Char('c')) {
+    if app.pending_key == Some(KeyCode::Char('c')) && app.commit_picker.is_none() {
         popup::render_commit_popup(f, area);
+    }
+
+    // Fixup/squash commit picker popup
+    if let Some(ref state) = app.commit_picker {
+        popup::render_commit_picker(f, area, state);
     }
 
     // Push submenu popup
