@@ -93,6 +93,10 @@ pub enum StatusItem {
     },
     DiffLine {
         line: String,
+        file_path: String,
+        section: Section,
+        hunk_index: usize,
+        line_in_hunk: usize,
     },
     UnpushedHeader {
         count: usize,
@@ -191,18 +195,27 @@ impl App {
                     if let Some(diff) = self.diff_cache.get(&format!("unstaged:{}", path)) {
                         let mut hunk_index: usize = 0;
                         let mut seen_first_hunk = false;
+                        let mut line_in_hunk: usize = 0;
                         for line in diff.lines() {
                             if line.starts_with("@@") {
                                 if seen_first_hunk { hunk_index += 1; }
                                 seen_first_hunk = true;
+                                line_in_hunk = 0;
                                 items.push(StatusItem::HunkHeader {
                                     line: line.to_string(),
                                     hunk_index,
                                     file_path: path.clone(),
                                     section: Section::Unstaged,
                                 });
-                            } else {
-                                items.push(StatusItem::DiffLine { line: line.to_string() });
+                            } else if seen_first_hunk {
+                                items.push(StatusItem::DiffLine {
+                                    line: line.to_string(),
+                                    file_path: path.clone(),
+                                    section: Section::Unstaged,
+                                    hunk_index,
+                                    line_in_hunk,
+                                });
+                                line_in_hunk += 1;
                             }
                         }
                     }
@@ -231,18 +244,27 @@ impl App {
                     if let Some(diff) = self.diff_cache.get(&format!("staged:{}", path)) {
                         let mut hunk_index: usize = 0;
                         let mut seen_first_hunk = false;
+                        let mut line_in_hunk: usize = 0;
                         for line in diff.lines() {
                             if line.starts_with("@@") {
                                 if seen_first_hunk { hunk_index += 1; }
                                 seen_first_hunk = true;
+                                line_in_hunk = 0;
                                 items.push(StatusItem::HunkHeader {
                                     line: line.to_string(),
                                     hunk_index,
                                     file_path: path.clone(),
                                     section: Section::Staged,
                                 });
-                            } else {
-                                items.push(StatusItem::DiffLine { line: line.to_string() });
+                            } else if seen_first_hunk {
+                                items.push(StatusItem::DiffLine {
+                                    line: line.to_string(),
+                                    file_path: path.clone(),
+                                    section: Section::Staged,
+                                    hunk_index,
+                                    line_in_hunk,
+                                });
+                                line_in_hunk += 1;
                             }
                         }
                     }
@@ -290,10 +312,10 @@ impl App {
         if self.buffer == ActiveBuffer::Status {
             let mut next = self.cursor + 1;
             while next < self.items.len() {
-                if matches!(self.items[next], StatusItem::DiffLine { .. }) {
-                    next += 1;
-                } else {
-                    break;
+                match &self.items[next] {
+                    StatusItem::DiffLine { line, .. }
+                        if !line.starts_with('+') && !line.starts_with('-') => { next += 1; }
+                    _ => break,
                 }
             }
             if next < self.items.len() {
@@ -310,13 +332,129 @@ impl App {
         if self.buffer == ActiveBuffer::Status {
             if self.cursor == 0 { return; }
             let mut prev = self.cursor - 1;
-            while prev > 0 && matches!(self.items[prev], StatusItem::DiffLine { .. }) {
-                prev -= 1;
+            while prev > 0 {
+                match &self.items[prev] {
+                    StatusItem::DiffLine { line, .. }
+                        if !line.starts_with('+') && !line.starts_with('-') => { prev -= 1; }
+                    _ => break,
+                }
             }
             self.cursor = prev;
         } else {
             if self.cursor > 0 { self.cursor -= 1; }
         }
+    }
+
+    /// Refresh status and re-fetch diffs for any currently-expanded views of `file_path`.
+    /// Clears both staged and unstaged caches for the file before re-fetching.
+    fn refresh_file_diffs(&mut self, file_path: &str) -> Result<()> {
+        let staged_key   = format!("staged:{}", file_path);
+        let unstaged_key = format!("unstaged:{}", file_path);
+        self.diff_cache.remove(&staged_key);
+        self.diff_cache.remove(&unstaged_key);
+
+        self.status = self.backend.status()?;
+        self.recent_commits = self.backend.log(5).unwrap_or_default();
+
+        if self.expanded.contains(&staged_key) {
+            if self.status.staged.iter().any(|e| e.path == file_path) {
+                if let Ok(diff) = self.backend.diff_file(file_path, true) {
+                    self.diff_cache.insert(staged_key, diff);
+                }
+            } else {
+                self.expanded.remove(&format!("staged:{}", file_path));
+            }
+        }
+        if self.expanded.contains(&unstaged_key) {
+            if self.status.unstaged.iter().any(|e| e.path == file_path) {
+                if let Ok(diff) = self.backend.diff_file(file_path, false) {
+                    self.diff_cache.insert(unstaged_key, diff);
+                }
+            } else {
+                self.expanded.remove(&format!("unstaged:{}", file_path));
+            }
+        }
+
+        self.rebuild_items();
+        if !self.items.is_empty() && self.cursor >= self.items.len() {
+            self.cursor = self.items.len() - 1;
+        }
+        Ok(())
+    }
+
+    /// Parse `@@ -old_start[,count] +new_start[,count] @@` and return (old_start, new_start).
+    fn parse_hunk_starts(header: &str) -> Option<(u32, u32)> {
+        let inner = header.strip_prefix("@@ ")?;
+        let (old_part, rest) = inner.split_once(' ')?;
+        let (new_part, _) = rest.split_once(' ')?;
+        let old_start: u32 = old_part.trim_start_matches('-').split(',').next()?.parse().ok()?;
+        let new_start: u32 = new_part.trim_start_matches('+').split(',').next()?.parse().ok()?;
+        Some((old_start, new_start))
+    }
+
+    /// Build a minimal patch for a single `+`/`-` line within a hunk.
+    ///
+    /// `reverse=false` (staging): the INDEX contains `-` lines (they haven't been removed yet)
+    /// and does NOT contain `+` lines. So `-` lines become context, `+` lines are dropped.
+    ///
+    /// `reverse=true` (unstaging): the INDEX contains `+` lines (they were staged) and does NOT
+    /// contain `-` lines (they were staged for removal). So `+` lines become context, `-` dropped.
+    fn extract_line_patch(diff: &str, hunk_index: usize, line_in_hunk: usize, reverse: bool) -> Option<String> {
+        let lines: Vec<&str> = diff.lines().collect();
+        let first_hunk = lines.iter().position(|l| l.starts_with("@@"))?;
+        let file_header = lines[..first_hunk].join("\n");
+
+        let hunk_starts: Vec<usize> = lines.iter()
+            .enumerate()
+            .filter_map(|(i, l)| if l.starts_with("@@") { Some(i) } else { None })
+            .collect();
+
+        let hunk_start = *hunk_starts.get(hunk_index)?;
+        let hunk_end = hunk_starts.get(hunk_index + 1).copied().unwrap_or(lines.len());
+        let hunk_body = &lines[hunk_start + 1..hunk_end];
+
+        let (old_start, new_start) = Self::parse_hunk_starts(lines[hunk_start])?;
+
+        let target_char = hunk_body.get(line_in_hunk)?.chars().next()?;
+        if target_char != '+' && target_char != '-' {
+            return None;
+        }
+
+        let mut new_body: Vec<String> = Vec::new();
+        for (i, &body_line) in hunk_body.iter().enumerate() {
+            let ch = body_line.chars().next().unwrap_or(' ');
+            if i == line_in_hunk {
+                new_body.push(body_line.to_string());
+            } else if ch == '+' {
+                if reverse {
+                    // Unstaging: `+` lines ARE in INDEX, use as context
+                    new_body.push(format!(" {}", &body_line[1..]));
+                }
+                // Staging: `+` lines are NOT in INDEX, drop them
+            } else if ch == '-' {
+                if !reverse {
+                    // Staging: `-` lines ARE in INDEX (not yet removed), use as context
+                    new_body.push(format!(" {}", &body_line[1..]));
+                }
+                // Unstaging: `-` lines are NOT in INDEX, drop them
+            } else {
+                new_body.push(body_line.to_string());
+            }
+        }
+
+        let old_count = new_body.iter()
+            .filter(|l| matches!(l.chars().next(), Some(' ') | Some('-')))
+            .count() as u32;
+        let new_count = new_body.iter()
+            .filter(|l| matches!(l.chars().next(), Some(' ') | Some('+')))
+            .count() as u32;
+
+        let mut patch = file_header;
+        patch.push('\n');
+        patch.push_str(&format!("@@ -{},{} +{},{} @@\n", old_start, old_count, new_start, new_count));
+        patch.push_str(&new_body.join("\n"));
+        patch.push('\n');
+        Some(patch)
     }
 
     /// Extract a single hunk from a diff string as a complete patch (file header + hunk body).
@@ -388,9 +526,23 @@ impl App {
                         if let Some(diff) = self.diff_cache.get(&key).cloned() {
                             if let Some(patch) = Self::extract_hunk_patch(&diff, hunk_index) {
                                 self.backend.apply_patch(&patch, false)?;
-                                self.diff_cache.remove(&key);
-                                self.refresh()?;
+                                self.refresh_file_diffs(&file_path)?;
                                 self.status_msg = Some(format!("Staged hunk {}", hunk_index + 1));
+                            }
+                        }
+                    }
+                }
+                StatusItem::DiffLine { line, file_path, section, hunk_index, line_in_hunk } => {
+                    if !line.starts_with('+') && !line.starts_with('-') {
+                        return Ok(());
+                    }
+                    if section == Section::Unstaged {
+                        let key = self.file_key(&section, &file_path);
+                        if let Some(diff) = self.diff_cache.get(&key).cloned() {
+                            if let Some(patch) = Self::extract_line_patch(&diff, hunk_index, line_in_hunk, false) {
+                                self.backend.apply_patch(&patch, false)?;
+                                self.refresh_file_diffs(&file_path)?;
+                                self.status_msg = Some("Staged line".to_string());
                             }
                         }
                     }
@@ -426,9 +578,23 @@ impl App {
                         if let Some(diff) = self.diff_cache.get(&key).cloned() {
                             if let Some(patch) = Self::extract_hunk_patch(&diff, hunk_index) {
                                 self.backend.apply_patch(&patch, true)?;
-                                self.diff_cache.remove(&key);
-                                self.refresh()?;
+                                self.refresh_file_diffs(&file_path)?;
                                 self.status_msg = Some(format!("Unstaged hunk {}", hunk_index + 1));
+                            }
+                        }
+                    }
+                }
+                StatusItem::DiffLine { line, file_path, section, hunk_index, line_in_hunk } => {
+                    if !line.starts_with('+') && !line.starts_with('-') {
+                        return Ok(());
+                    }
+                    if section == Section::Staged {
+                        let key = self.file_key(&section, &file_path);
+                        if let Some(diff) = self.diff_cache.get(&key).cloned() {
+                            if let Some(patch) = Self::extract_line_patch(&diff, hunk_index, line_in_hunk, true) {
+                                self.backend.apply_patch(&patch, true)?;
+                                self.refresh_file_diffs(&file_path)?;
+                                self.status_msg = Some("Unstaged line".to_string());
                             }
                         }
                     }

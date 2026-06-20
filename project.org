@@ -2,7 +2,7 @@
 
 * Tasks
 
-** TODO Line-level staging
+** DONE Line-level staging
 Stage/unstage individual lines within a hunk (visual selection or cursor-based). The UX model: expand a hunk, move cursor to a line, press =s= to stage just that line. Requires splitting hunks in the backend and applying partial patches.
 
 ** TODO Branch management popup (=b=)

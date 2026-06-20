@@ -72,7 +72,7 @@ fn status_item_to_list_item(item: &StatusItem) -> ListItem<'static> {
             )))
         }
 
-        StatusItem::DiffLine { line } => {
+        StatusItem::DiffLine { line, .. } => {
             let style = if line.starts_with('+') {
                 Style::new().fg(Color::Green)
             } else if line.starts_with('-') {
