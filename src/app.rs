@@ -345,9 +345,11 @@ impl App {
         }
     }
 
-    /// Refresh status and re-fetch diffs for any currently-expanded views of `file_path`.
-    /// Clears both staged and unstaged caches for the file before re-fetching.
-    fn refresh_file_diffs(&mut self, file_path: &str) -> Result<()> {
+    /// Refresh status and diffs for `file_path` after a stage/unstage operation.
+    /// `destination` is the section that just received the change — it is always
+    /// expanded and re-fetched so the user can see the result immediately.
+    /// The other section is re-fetched only if it was already expanded.
+    fn refresh_file_diffs(&mut self, file_path: &str, destination: &Section) -> Result<()> {
         let staged_key   = format!("staged:{}", file_path);
         let unstaged_key = format!("unstaged:{}", file_path);
         self.diff_cache.remove(&staged_key);
@@ -356,28 +358,42 @@ impl App {
         self.status = self.backend.status()?;
         self.recent_commits = self.backend.log(5).unwrap_or_default();
 
-        if self.expanded.contains(&staged_key) {
-            if self.status.staged.iter().any(|e| e.path == file_path) {
+        let want_staged   = *destination == Section::Staged
+            || self.expanded.contains(&staged_key);
+        let want_unstaged = *destination == Section::Unstaged
+            || self.expanded.contains(&unstaged_key);
+
+        if self.status.staged.iter().any(|e| e.path == file_path) {
+            if want_staged {
+                self.expanded.insert(staged_key.clone());
                 if let Ok(diff) = self.backend.diff_file(file_path, true) {
                     self.diff_cache.insert(staged_key, diff);
                 }
-            } else {
-                self.expanded.remove(&format!("staged:{}", file_path));
             }
+        } else {
+            self.expanded.remove(&staged_key);
         }
-        if self.expanded.contains(&unstaged_key) {
-            if self.status.unstaged.iter().any(|e| e.path == file_path) {
+
+        if self.status.unstaged.iter().any(|e| e.path == file_path) {
+            if want_unstaged {
+                self.expanded.insert(unstaged_key.clone());
                 if let Ok(diff) = self.backend.diff_file(file_path, false) {
                     self.diff_cache.insert(unstaged_key, diff);
                 }
-            } else {
-                self.expanded.remove(&format!("unstaged:{}", file_path));
             }
+        } else {
+            self.expanded.remove(&unstaged_key);
         }
 
         self.rebuild_items();
-        if !self.items.is_empty() && self.cursor >= self.items.len() {
-            self.cursor = self.items.len() - 1;
+        // Clamp then snap cursor off Spacers
+        if !self.items.is_empty() {
+            if self.cursor >= self.items.len() {
+                self.cursor = self.items.len() - 1;
+            }
+            while self.cursor > 0 && matches!(self.items[self.cursor], StatusItem::Spacer) {
+                self.cursor -= 1;
+            }
         }
         Ok(())
     }
@@ -488,8 +504,7 @@ impl App {
                     match section {
                         Section::Unstaged | Section::Untracked => {
                             self.backend.stage_file(&entry.path)?;
-                            self.diff_cache.remove(&self.file_key(&section, &entry.path));
-                            self.refresh()?;
+                            self.refresh_file_diffs(&entry.path, &Section::Staged)?;
                             self.status_msg = Some(format!("Staged: {}", entry.path));
                         }
                         Section::Staged => {
@@ -526,7 +541,7 @@ impl App {
                         if let Some(diff) = self.diff_cache.get(&key).cloned() {
                             if let Some(patch) = Self::extract_hunk_patch(&diff, hunk_index) {
                                 self.backend.apply_patch(&patch, false)?;
-                                self.refresh_file_diffs(&file_path)?;
+                                self.refresh_file_diffs(&file_path, &Section::Staged)?;
                                 self.status_msg = Some(format!("Staged hunk {}", hunk_index + 1));
                             }
                         }
@@ -541,7 +556,7 @@ impl App {
                         if let Some(diff) = self.diff_cache.get(&key).cloned() {
                             if let Some(patch) = Self::extract_line_patch(&diff, hunk_index, line_in_hunk, false) {
                                 self.backend.apply_patch(&patch, false)?;
-                                self.refresh_file_diffs(&file_path)?;
+                                self.refresh_file_diffs(&file_path, &Section::Staged)?;
                                 self.status_msg = Some("Staged line".to_string());
                             }
                         }
@@ -559,8 +574,7 @@ impl App {
                 StatusItem::File { entry, section, .. } => {
                     if section == Section::Staged {
                         self.backend.unstage_file(&entry.path)?;
-                        self.diff_cache.remove(&self.file_key(&section, &entry.path));
-                        self.refresh()?;
+                        self.refresh_file_diffs(&entry.path, &Section::Unstaged)?;
                         self.status_msg = Some(format!("Unstaged: {}", entry.path));
                     }
                 }
@@ -578,7 +592,7 @@ impl App {
                         if let Some(diff) = self.diff_cache.get(&key).cloned() {
                             if let Some(patch) = Self::extract_hunk_patch(&diff, hunk_index) {
                                 self.backend.apply_patch(&patch, true)?;
-                                self.refresh_file_diffs(&file_path)?;
+                                self.refresh_file_diffs(&file_path, &Section::Unstaged)?;
                                 self.status_msg = Some(format!("Unstaged hunk {}", hunk_index + 1));
                             }
                         }
@@ -593,7 +607,7 @@ impl App {
                         if let Some(diff) = self.diff_cache.get(&key).cloned() {
                             if let Some(patch) = Self::extract_line_patch(&diff, hunk_index, line_in_hunk, true) {
                                 self.backend.apply_patch(&patch, true)?;
-                                self.refresh_file_diffs(&file_path)?;
+                                self.refresh_file_diffs(&file_path, &Section::Unstaged)?;
                                 self.status_msg = Some("Unstaged line".to_string());
                             }
                         }

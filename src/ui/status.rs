@@ -30,6 +30,14 @@ pub fn render_status(f: &mut Frame, app: &mut App, area: Rect) {
     let mut state = ListState::default();
     if !app.items.is_empty() {
         state.select(Some(app.cursor));
+        // Scrolloff: keep 5 lines visible below cursor when possible
+        const SCROLLOFF: usize = 5;
+        let h = area.height as usize;
+        let n = app.items.len();
+        let offset = (app.cursor + SCROLLOFF + 1)
+            .saturating_sub(h)
+            .min(n.saturating_sub(h));
+        *state.offset_mut() = offset;
     }
 
     f.render_stateful_widget(list, area, &mut state);
