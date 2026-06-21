@@ -535,11 +535,7 @@ fn do_commit(app: &mut App) {
 
 /// Open the inline TUI commit editor for an amend.
 fn do_commit_amend(app: &mut App) -> Result<()> {
-    let last_message = app.backend.log(1)?
-        .into_iter()
-        .next()
-        .map(|c| c.summary)
-        .unwrap_or_default();
+    let last_message = app.backend.head_commit_message().unwrap_or_default();
 
     let comments = get_staged_summary(app);
     let mut comment_lines = vec![

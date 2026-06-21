@@ -72,6 +72,7 @@ pub trait Backend {
     fn unstage_all(&self) -> Result<()>;
     fn commit(&self, message: &str) -> Result<()>;
     fn amend(&self, message: &str) -> Result<()>;
+    fn head_commit_message(&self) -> Result<String>;
     fn log(&self, limit: usize) -> Result<Vec<CommitInfo>>;
     fn push(&self) -> Result<String>;
     fn push_force_lease(&self) -> Result<String>;

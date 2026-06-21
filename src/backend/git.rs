@@ -296,6 +296,12 @@ impl Backend for GitBackend {
         Ok(())
     }
 
+    fn head_commit_message(&self) -> Result<String> {
+        let head = self.repo.head()?;
+        let commit = head.peel_to_commit()?;
+        Ok(commit.message().unwrap_or("").to_string())
+    }
+
     fn push(&self) -> Result<String> {
         let out = std::process::Command::new("git")
             .args(["push"])

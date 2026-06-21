@@ -118,6 +118,10 @@ impl Backend for JjBackend {
         bail!("amend not supported for jj backend")
     }
 
+    fn head_commit_message(&self) -> Result<String> {
+        bail!("head_commit_message not supported for jj backend")
+    }
+
     fn push(&self) -> Result<String> {
         let out = self.run_jj(&["git", "push"])?;
         Ok(if out.trim().is_empty() { "Push successful".into() } else { out.trim().to_string() })
