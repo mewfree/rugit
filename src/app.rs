@@ -46,6 +46,7 @@ pub struct EditorState {
     pub pending_colon: bool,
     pub pending_ctrl_c: bool,
     pub pending_d: bool,
+    pub pending_g: bool,
     pub is_amend: bool,
 }
 
@@ -73,6 +74,7 @@ impl EditorState {
             pending_colon: false,
             pending_ctrl_c: false,
             pending_d: false,
+            pending_g: false,
             is_amend,
         }
     }

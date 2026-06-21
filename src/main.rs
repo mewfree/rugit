@@ -559,6 +559,7 @@ fn do_commit_amend(app: &mut App) -> Result<()> {
 fn handle_editor_key(app: &mut App, key: crossterm::event::KeyEvent) {
     use app::EditorMode;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use tui_textarea::CursorMove;
 
     // Ctrl-C Ctrl-C (Emacs-style): first press arms, second press saves.
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
@@ -605,23 +606,32 @@ fn handle_editor_key(app: &mut App, key: crossterm::event::KeyEvent) {
                     }
                 } else if state.pending_d {
                     state.pending_d = false;
-                    let ctrl = KeyModifiers::CONTROL;
-                    let none = KeyModifiers::NONE;
                     match key.code {
                         KeyCode::Char('d') => {
-                            // dd: clear line (Home + Ctrl+K)
-                            state.textarea.input(KeyEvent::new(KeyCode::Home, none));
-                            state.textarea.input(KeyEvent::new(KeyCode::Char('k'), ctrl));
+                            // dd: delete entire line
+                            let (row, _) = state.textarea.cursor();
+                            let line_count = state.textarea.lines().len();
+                            state.textarea.move_cursor(CursorMove::Head);
+                            state.textarea.delete_line_by_end();
+                            if row + 1 < line_count {
+                                state.textarea.delete_next_char();
+                            } else if row > 0 {
+                                state.textarea.delete_char();
+                            }
                         }
                         KeyCode::Char('w') => {
-                            // dw: Alt+D (kill word forward)
-                            state.textarea.input(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::ALT));
+                            // dw: delete word forward
+                            state.textarea.delete_next_word();
                         }
                         _ => {} // any other key cancels
                     }
+                } else if state.pending_g {
+                    state.pending_g = false;
+                    if key.code == KeyCode::Char('g') {
+                        state.textarea.move_cursor(CursorMove::Top);
+                    }
                 } else {
                     let none = KeyModifiers::NONE;
-                    let alt  = KeyModifiers::ALT;
                     let ctrl = KeyModifiers::CONTROL;
                     match key.code {
                         // Mode transitions
@@ -632,19 +642,33 @@ fn handle_editor_key(app: &mut App, key: crossterm::event::KeyEvent) {
                         }
                         KeyCode::Char('A') => {
                             state.mode = EditorMode::Insert;
-                            state.textarea.input(KeyEvent::new(KeyCode::End, none));
+                            state.textarea.move_cursor(CursorMove::End);
+                        }
+                        KeyCode::Char('o') => {
+                            state.textarea.move_cursor(CursorMove::End);
+                            state.textarea.insert_newline();
+                            state.mode = EditorMode::Insert;
+                        }
+                        KeyCode::Char('O') => {
+                            state.textarea.move_cursor(CursorMove::Head);
+                            state.textarea.insert_newline();
+                            state.textarea.move_cursor(CursorMove::Up);
+                            state.mode = EditorMode::Insert;
                         }
                         // Movements
-                        KeyCode::Char('h') | KeyCode::Left  => { state.textarea.input(KeyEvent::new(KeyCode::Left,  none)); }
-                        KeyCode::Char('l') | KeyCode::Right => { state.textarea.input(KeyEvent::new(KeyCode::Right, none)); }
-                        KeyCode::Char('j') | KeyCode::Down  => { state.textarea.input(KeyEvent::new(KeyCode::Down,  none)); }
-                        KeyCode::Char('k') | KeyCode::Up    => { state.textarea.input(KeyEvent::new(KeyCode::Up,    none)); }
-                        KeyCode::Char('w') => { state.textarea.input(KeyEvent::new(KeyCode::Char('f'), alt)); }
-                        KeyCode::Char('b') => { state.textarea.input(KeyEvent::new(KeyCode::Char('b'), alt)); }
-                        KeyCode::Char('0') => { state.textarea.input(KeyEvent::new(KeyCode::Home, none)); }
-                        KeyCode::Char('$') => { state.textarea.input(KeyEvent::new(KeyCode::End,  none)); }
+                        KeyCode::Char('h') | KeyCode::Left  => { state.textarea.move_cursor(CursorMove::Back); }
+                        KeyCode::Char('l') | KeyCode::Right => { state.textarea.move_cursor(CursorMove::Forward); }
+                        KeyCode::Char('j') | KeyCode::Down  => { state.textarea.move_cursor(CursorMove::Down); }
+                        KeyCode::Char('k') | KeyCode::Up    => { state.textarea.move_cursor(CursorMove::Up); }
+                        KeyCode::Char('w') => { state.textarea.move_cursor(CursorMove::WordForward); }
+                        KeyCode::Char('b') => { state.textarea.move_cursor(CursorMove::WordBack); }
+                        KeyCode::Char('e') => { state.textarea.move_cursor(CursorMove::WordEnd); }
+                        KeyCode::Char('0') => { state.textarea.move_cursor(CursorMove::Head); }
+                        KeyCode::Char('$') => { state.textarea.move_cursor(CursorMove::End); }
+                        KeyCode::Char('G') => { state.textarea.move_cursor(CursorMove::Bottom); }
+                        KeyCode::Char('g') => { state.pending_g = true; }
                         // Editing
-                        KeyCode::Char('x') => { state.textarea.input(KeyEvent::new(KeyCode::Delete, none)); }
+                        KeyCode::Char('x') => { state.textarea.delete_next_char(); }
                         KeyCode::Char('d') => { state.pending_d = true; }
                         KeyCode::Char('u') => { state.textarea.undo(); }
                         KeyCode::Char('r') if key.modifiers.contains(ctrl) => { state.textarea.redo(); }
