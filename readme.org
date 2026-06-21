@@ -4,23 +4,7 @@
 A keyboard-driven terminal UI for [[https://git-scm.com/][Git]] and [[https://github.com/martinvonz/jj][Jujutsu (jj)]], heavily inspired by [[https://magit.vc/][Magit]].
 Built in Rust for speed and portability.
 
-#+begin_example
-┌─ rugit ──────────────────────────────────────────────────────┐
-│ Head:     main  Add README                                   │
-│ Push:     origin/main  (up to date)                          │
-├──────────────────────────────────────────────────────────────┤
-│ Unstaged changes (2)                                         │
-│   modified  src/ui/status.rs                                 │
-│   modified  src/backend/git.rs                               │
-│                                                              │
-│ Staged changes (1)                                           │
-│   modified  Cargo.toml                                       │
-│                                                              │
-│ Recent commits                                               │
-│ ● abc1234  Add README                                        │
-│ ○ def5678  Initial project scaffold                          │
-└──────────────────────────────────────────────────────────────┘
-#+end_example
+[[file:demo.gif]]
 
 * Features
 
