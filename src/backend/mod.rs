@@ -60,6 +60,12 @@ pub struct StashInfo {
     pub summary: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct BranchInfo {
+    pub name: String,
+    pub is_current: bool,
+}
+
 pub trait Backend {
     fn repo_root(&self) -> &Path;
     fn kind_name(&self) -> &'static str;
@@ -88,6 +94,11 @@ pub trait Backend {
     fn stash_apply(&self, index: usize) -> Result<()>;
     fn stash_drop(&self, index: usize) -> Result<()>;
     fn stash_list(&self) -> Result<Vec<StashInfo>>;
+    fn list_branches(&self) -> Result<Vec<BranchInfo>>;
+    fn checkout_branch(&self, name: &str) -> Result<()>;
+    fn create_branch(&self, name: &str) -> Result<()>;
+    fn delete_branch(&self, name: &str) -> Result<()>;
+    fn rename_branch(&self, old: &str, new: &str) -> Result<()>;
 }
 
 #[derive(Debug, Clone, PartialEq, ValueEnum)]

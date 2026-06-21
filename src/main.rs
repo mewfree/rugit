@@ -14,7 +14,7 @@ mod keybindings;
 mod backend;
 mod ui;
 
-use app::{ActiveBuffer, App, CommitPickerState, EditorState, FixupMode, StashListState};
+use app::{ActiveBuffer, App, BranchNameInputState, BranchNameMode, BranchPickerMode, BranchPickerState, CommitPickerState, EditorState, FixupMode, StashListState};
 use backend::{detect_backend, BackendKind};
 use config::Config;
 use keybindings::{key_to_action, Action};
@@ -153,6 +153,112 @@ fn run_app(
                     continue;
                 }
 
+                // Handle branch name input popup
+                if app.branch_name_input.is_some() {
+                    match key.code {
+                        KeyCode::Esc => {
+                            app.branch_name_input = None;
+                            app.pending_key = None;
+                            app.status_msg = None;
+                        }
+                        KeyCode::Enter => {
+                            if let Some(state) = app.branch_name_input.take() {
+                                app.pending_key = None;
+                                let name = state.input.trim().to_string();
+                                if name.is_empty() {
+                                    app.status_msg = Some("Cancelled: empty name".to_string());
+                                } else {
+                                    let result = match state.mode {
+                                        BranchNameMode::Create => app.backend.create_branch(&name),
+                                        BranchNameMode::Rename => app.backend.rename_branch(&state.original, &name),
+                                    };
+                                    match result {
+                                        Ok(_) => {
+                                            let _ = app.refresh();
+                                            app.status_msg = Some(match state.mode {
+                                                BranchNameMode::Create => format!("Created and switched to '{}'", name),
+                                                BranchNameMode::Rename => format!("Renamed to '{}'", name),
+                                            });
+                                        }
+                                        Err(e) => {
+                                            app.status_msg = Some(format!("Error: {}", first_line(&e.to_string())));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        KeyCode::Backspace => {
+                            if let Some(ref mut state) = app.branch_name_input {
+                                state.input.pop();
+                            }
+                        }
+                        KeyCode::Char(c) => {
+                            if let Some(ref mut state) = app.branch_name_input {
+                                state.input.push(c);
+                            }
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
+
+                // Handle branch picker popup (checkout / delete)
+                if app.branch_picker.is_some() {
+                    match key.code {
+                        KeyCode::Esc => {
+                            app.branch_picker = None;
+                            app.pending_key = None;
+                            app.status_msg = None;
+                        }
+                        KeyCode::Char('j') | KeyCode::Down => {
+                            if let Some(ref mut bp) = app.branch_picker {
+                                if bp.cursor + 1 < bp.branches.len() {
+                                    bp.cursor += 1;
+                                }
+                            }
+                        }
+                        KeyCode::Char('k') | KeyCode::Up => {
+                            if let Some(ref mut bp) = app.branch_picker {
+                                if bp.cursor > 0 {
+                                    bp.cursor -= 1;
+                                }
+                            }
+                        }
+                        KeyCode::Enter => {
+                            if let Some(bp) = app.branch_picker.take() {
+                                app.pending_key = None;
+                                if let Some(branch) = bp.branches.get(bp.cursor) {
+                                    let name = branch.name.clone();
+                                    let result = match bp.mode {
+                                        BranchPickerMode::Checkout => app.backend.checkout_branch(&name),
+                                        BranchPickerMode::Delete => {
+                                            if branch.is_current {
+                                                Err(anyhow::anyhow!("Cannot delete the currently checked-out branch"))
+                                            } else {
+                                                app.backend.delete_branch(&name)
+                                            }
+                                        }
+                                    };
+                                    match result {
+                                        Ok(_) => {
+                                            let _ = app.refresh();
+                                            app.status_msg = Some(match bp.mode {
+                                                BranchPickerMode::Checkout => format!("Switched to '{}'", name),
+                                                BranchPickerMode::Delete   => format!("Deleted '{}'", name),
+                                            });
+                                        }
+                                        Err(e) => {
+                                            app.status_msg = Some(format!("Error: {}", first_line(&e.to_string())));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
+
                 // Handle commit picker popup (fixup/squash)
                 if app.commit_picker.is_some() {
                     match key.code {
@@ -254,8 +360,9 @@ fn run_app(
 
                 match action {
                     Action::Quit => {
-                        if app.buffer == ActiveBuffer::Help {
+                        if app.buffer == ActiveBuffer::Help || app.buffer == ActiveBuffer::Log {
                             app.buffer = ActiveBuffer::Status;
+                            app.cursor = 0;
                             app.pending_key = None;
                         } else {
                             app.should_quit = true;
@@ -326,11 +433,6 @@ fn run_app(
                             app.buffer = ActiveBuffer::Log;
                             app.cursor = 0;
                         }
-                        app.pending_key = None;
-                    }
-                    Action::SwitchToStatus => {
-                        app.buffer = ActiveBuffer::Status;
-                        app.cursor = 0;
                         app.pending_key = None;
                     }
                     Action::Refresh => {
@@ -496,6 +598,65 @@ fn run_app(
                                 app.status_msg = Some(format!("Error: {}", e));
                             }
                         }
+                    }
+                    Action::BranchBegin => {
+                        app.pending_key = Some(crossterm::event::KeyCode::Char('b'));
+                        app.status_msg = Some("b-".to_string());
+                    }
+                    Action::BranchCheckout => {
+                        app.pending_key = None;
+                        match app.backend.list_branches() {
+                            Ok(branches) if branches.is_empty() => {
+                                app.status_msg = Some("No local branches".to_string());
+                            }
+                            Ok(branches) => {
+                                let cursor = branches.iter().position(|b| b.is_current).unwrap_or(0);
+                                app.branch_picker = Some(BranchPickerState {
+                                    branches,
+                                    cursor,
+                                    mode: BranchPickerMode::Checkout,
+                                });
+                            }
+                            Err(e) => {
+                                app.status_msg = Some(format!("Error: {}", first_line(&e.to_string())));
+                            }
+                        }
+                    }
+                    Action::BranchCreate => {
+                        app.pending_key = None;
+                        app.branch_name_input = Some(BranchNameInputState {
+                            input: String::new(),
+                            mode: BranchNameMode::Create,
+                            original: String::new(),
+                        });
+                    }
+                    Action::BranchDelete => {
+                        app.pending_key = None;
+                        match app.backend.list_branches() {
+                            Ok(branches) if branches.is_empty() => {
+                                app.status_msg = Some("No local branches".to_string());
+                            }
+                            Ok(branches) => {
+                                let cursor = branches.iter().position(|b| !b.is_current).unwrap_or(0);
+                                app.branch_picker = Some(BranchPickerState {
+                                    branches,
+                                    cursor,
+                                    mode: BranchPickerMode::Delete,
+                                });
+                            }
+                            Err(e) => {
+                                app.status_msg = Some(format!("Error: {}", first_line(&e.to_string())));
+                            }
+                        }
+                    }
+                    Action::BranchRename => {
+                        app.pending_key = None;
+                        let current = app.status.head.clone().unwrap_or_default();
+                        app.branch_name_input = Some(BranchNameInputState {
+                            input: current.clone(),
+                            mode: BranchNameMode::Rename,
+                            original: current,
+                        });
                     }
                     Action::None => {
                         // Clear pending key if it doesn't form a valid chord

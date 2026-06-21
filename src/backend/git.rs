@@ -307,7 +307,6 @@ impl Backend for GitBackend {
             .args(["push"])
             .current_dir(&self.root)
             .output()?;
-        // git writes progress to stderr even on success
         let combined = format!(
             "{}{}",
             String::from_utf8_lossy(&out.stdout),
@@ -316,10 +315,30 @@ impl Backend for GitBackend {
         .trim()
         .to_string();
         if out.status.success() {
-            Ok(if combined.is_empty() { "Push successful".into() } else { combined })
-        } else {
-            anyhow::bail!("{}", combined)
+            return Ok(if combined.is_empty() { "Push successful".into() } else { combined });
         }
+        // No upstream configured — push with --set-upstream to origin
+        if combined.contains("no upstream branch") || combined.contains("has no upstream") {
+            let branch = self.repo.head().ok()
+                .and_then(|h| h.shorthand().map(|s| s.to_string()))
+                .ok_or_else(|| anyhow::anyhow!("Could not determine current branch"))?;
+            let out2 = std::process::Command::new("git")
+                .args(["push", "--set-upstream", "origin", &branch])
+                .current_dir(&self.root)
+                .output()?;
+            let combined2 = format!(
+                "{}{}",
+                String::from_utf8_lossy(&out2.stdout),
+                String::from_utf8_lossy(&out2.stderr),
+            )
+            .trim()
+            .to_string();
+            if out2.status.success() {
+                return Ok(if combined2.is_empty() { format!("Pushed '{}' to origin", branch) } else { combined2 });
+            }
+            anyhow::bail!("{}", combined2);
+        }
+        anyhow::bail!("{}", combined)
     }
 
     fn push_force_lease(&self) -> Result<String> {
@@ -547,6 +566,69 @@ impl Backend for GitBackend {
             });
         }
         Ok(stashes)
+    }
+
+    fn list_branches(&self) -> Result<Vec<super::BranchInfo>> {
+        let head_name = self.repo.head().ok()
+            .and_then(|h| h.shorthand().map(|s| s.to_string()))
+            .unwrap_or_default();
+        let branches = self.repo.branches(Some(git2::BranchType::Local))?;
+        let mut result = Vec::new();
+        for branch_result in branches {
+            let (branch, _) = branch_result?;
+            if let Some(name) = branch.name()? {
+                result.push(super::BranchInfo {
+                    name: name.to_string(),
+                    is_current: name == head_name,
+                });
+            }
+        }
+        result.sort_by(|a, b| b.is_current.cmp(&a.is_current).then(a.name.cmp(&b.name)));
+        Ok(result)
+    }
+
+    fn checkout_branch(&self, name: &str) -> Result<()> {
+        let out = std::process::Command::new("git")
+            .args(["switch", name])
+            .current_dir(&self.root)
+            .output()?;
+        if !out.status.success() {
+            anyhow::bail!("{}", String::from_utf8_lossy(&out.stderr).trim());
+        }
+        Ok(())
+    }
+
+    fn create_branch(&self, name: &str) -> Result<()> {
+        let out = std::process::Command::new("git")
+            .args(["switch", "-c", name])
+            .current_dir(&self.root)
+            .output()?;
+        if !out.status.success() {
+            anyhow::bail!("{}", String::from_utf8_lossy(&out.stderr).trim());
+        }
+        Ok(())
+    }
+
+    fn delete_branch(&self, name: &str) -> Result<()> {
+        let out = std::process::Command::new("git")
+            .args(["branch", "-d", name])
+            .current_dir(&self.root)
+            .output()?;
+        if !out.status.success() {
+            anyhow::bail!("{}", String::from_utf8_lossy(&out.stderr).trim());
+        }
+        Ok(())
+    }
+
+    fn rename_branch(&self, old: &str, new: &str) -> Result<()> {
+        let out = std::process::Command::new("git")
+            .args(["branch", "-m", old, new])
+            .current_dir(&self.root)
+            .output()?;
+        if !out.status.success() {
+            anyhow::bail!("{}", String::from_utf8_lossy(&out.stderr).trim());
+        }
+        Ok(())
     }
 }
 

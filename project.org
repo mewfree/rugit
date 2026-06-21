@@ -8,7 +8,7 @@ Stage/unstage individual lines within a hunk (visual selection or cursor-based).
 ** DONE Visual-mode multi-line staging (=V=)
 Press =V= to enter visual mode, move with =j=/=k= to extend the selection, then =s= or =u= to stage/unstage all selected =+=/=-= lines. Multiple hunks per file are handled by building one patch per hunk from the cached diff. =Esc= exits visual mode.
 
-** TODO Branch management popup (=b=)
+** DONE Branch management popup (=b=)
 Magit-style transient: =b b= checkout, =b c= create+checkout, =b d= delete, =b r= rename. Needs a branch list picker UI.
 
 ** TODO Interactive rebase UI (=r i=)

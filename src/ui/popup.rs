@@ -5,7 +5,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
     Frame,
 };
-use crate::app::{CommitPickerState, FixupMode, StashListState};
+use crate::app::{BranchNameInputState, BranchNameMode, BranchPickerMode, BranchPickerState, CommitPickerState, FixupMode, StashListState};
 
 pub fn render_help(f: &mut Frame, area: Rect) {
     let popup_area = centered_rect(60, 90, area);
@@ -56,9 +56,15 @@ pub fn render_help(f: &mut Frame, area: Rect) {
         key("  p f         ", "Force-push (--force-with-lease)"),
         key("  F           ", "Pull from upstream"),
         Line::from(""),
+        section("  Branches"),
+        key("  b           ", "Open branch menu"),
+        key("  b b         ", "Checkout branch"),
+        key("  b c         ", "Create & checkout new branch"),
+        key("  b d         ", "Delete branch"),
+        key("  b r         ", "Rename current branch"),
+        Line::from(""),
         section("  Views & misc"),
         key("  l           ", "Switch to log view"),
-        key("  b           ", "Switch to status view"),
         key("  g           ", "Refresh"),
         key("  ?           ", "Show this help"),
         key("  q / Esc     ", "Quit / close"),
@@ -329,6 +335,146 @@ pub fn render_stash_list(f: &mut Frame, area: Rect, state: &StashListState) {
                 .title_alignment(Alignment::Center)
                 .borders(Borders::ALL)
                 .border_style(Style::new().fg(Color::Magenta)),
+        )
+        .alignment(Alignment::Left);
+
+    f.render_widget(paragraph, popup_area);
+}
+
+pub fn render_branch_popup(f: &mut Frame, area: Rect) {
+    let popup_area = centered_rect(50, 35, area);
+    f.render_widget(Clear, popup_area);
+
+    let lines = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  b  ", Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::raw("Checkout branch"),
+        ]),
+        Line::from(vec![
+            Span::styled("  c  ", Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::raw("Create & checkout new branch"),
+        ]),
+        Line::from(vec![
+            Span::styled("  d  ", Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::raw("Delete branch"),
+        ]),
+        Line::from(vec![
+            Span::styled("  r  ", Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::raw("Rename current branch"),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Esc / any other key: cancel",
+            Style::new().fg(Color::DarkGray),
+        )),
+    ];
+
+    let paragraph = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title(" Branch ")
+                .title_alignment(Alignment::Center)
+                .borders(Borders::ALL)
+                .border_style(Style::new().fg(Color::LightGreen)),
+        )
+        .alignment(Alignment::Left);
+
+    f.render_widget(paragraph, popup_area);
+}
+
+pub fn render_branch_picker(f: &mut Frame, area: Rect, state: &BranchPickerState) {
+    let popup_area = centered_rect(60, 60, area);
+    f.render_widget(Clear, popup_area);
+
+    let title = match state.mode {
+        BranchPickerMode::Checkout => " Checkout branch ",
+        BranchPickerMode::Delete   => " Delete branch ",
+    };
+
+    let inner_height = popup_area.height.saturating_sub(4) as usize;
+    let visible_start = if state.cursor >= inner_height {
+        state.cursor - inner_height + 1
+    } else {
+        0
+    };
+
+    let mut lines: Vec<Line> = vec![Line::from("")];
+    for (i, branch) in state.branches.iter().enumerate().skip(visible_start).take(inner_height) {
+        let selected = i == state.cursor;
+        let prefix = if selected { "> " } else { "  " };
+        let mut spans = vec![Span::raw(prefix)];
+        if branch.is_current {
+            spans.push(Span::styled(
+                "* ",
+                Style::new().fg(Color::Green).add_modifier(Modifier::BOLD),
+            ));
+        } else {
+            spans.push(Span::raw("  "));
+        }
+        let name_style = if selected {
+            Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        } else if branch.is_current {
+            Style::new().fg(Color::Green)
+        } else {
+            Style::new()
+        };
+        spans.push(Span::styled(branch.name.clone(), name_style));
+        lines.push(Line::from(spans));
+    }
+
+    lines.push(Line::from(""));
+    let hint = match state.mode {
+        BranchPickerMode::Checkout => "  j/k: navigate   Enter: checkout   Esc: cancel",
+        BranchPickerMode::Delete   => "  j/k: navigate   Enter: delete   Esc: cancel",
+    };
+    lines.push(Line::from(Span::styled(hint, Style::new().fg(Color::DarkGray))));
+
+    let paragraph = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title(title)
+                .title_alignment(Alignment::Center)
+                .borders(Borders::ALL)
+                .border_style(Style::new().fg(Color::LightGreen)),
+        )
+        .alignment(Alignment::Left);
+
+    f.render_widget(paragraph, popup_area);
+}
+
+pub fn render_branch_name_input(f: &mut Frame, area: Rect, state: &BranchNameInputState) {
+    let popup_area = centered_rect(50, 20, area);
+    f.render_widget(Clear, popup_area);
+
+    let title = match state.mode {
+        BranchNameMode::Create => " New branch name ",
+        BranchNameMode::Rename => " Rename branch ",
+    };
+
+    let prompt = if state.mode == BranchNameMode::Rename {
+        format!("  Rename '{}' to: {}_", state.original, state.input)
+    } else {
+        format!("  Branch name: {}_", state.input)
+    };
+
+    let lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(prompt, Style::new().fg(Color::White))),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Enter: confirm   Esc: cancel",
+            Style::new().fg(Color::DarkGray),
+        )),
+    ];
+
+    let paragraph = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title(title)
+                .title_alignment(Alignment::Center)
+                .borders(Borders::ALL)
+                .border_style(Style::new().fg(Color::LightGreen)),
         )
         .alignment(Alignment::Left);
 

@@ -11,7 +11,6 @@ pub enum Action {
     UnstageAll,
     ToggleExpand,
     SwitchToLog,
-    SwitchToStatus,
     Refresh,
     ShowHelp,
     HideHelp,
@@ -33,6 +32,11 @@ pub enum Action {
     StashApply,   // 'z a'
     StashDrop,    // 'z d'
     StashList,    // 'z l'
+    BranchBegin,     // 'b' — opens branch submenu
+    BranchCheckout,  // 'b b'
+    BranchCreate,    // 'b c'
+    BranchDelete,    // 'b d'
+    BranchRename,    // 'b r'
     None,
 }
 
@@ -68,6 +72,13 @@ pub fn key_to_action(key: KeyEvent, pending: Option<KeyCode>) -> Action {
                 KeyCode::Char('l') => return Action::StashList,
                 _ => return Action::None,
             },
+            KeyCode::Char('b') => match key.code {
+                KeyCode::Char('b') => return Action::BranchCheckout,
+                KeyCode::Char('c') => return Action::BranchCreate,
+                KeyCode::Char('d') => return Action::BranchDelete,
+                KeyCode::Char('r') => return Action::BranchRename,
+                _ => return Action::None,
+            },
             _ => {}
         }
     }
@@ -82,7 +93,7 @@ pub fn key_to_action(key: KeyEvent, pending: Option<KeyCode>) -> Action {
         KeyCode::Char('U') => Action::UnstageAll,
         KeyCode::Tab => Action::ToggleExpand,
         KeyCode::Char('l') => Action::SwitchToLog,
-        KeyCode::Char('b') => Action::SwitchToStatus,
+        KeyCode::Char('b') => Action::BranchBegin,
         KeyCode::Char('g') => Action::Refresh,
         KeyCode::Char('?') => Action::ShowHelp,
         KeyCode::Esc => Action::HideHelp,
