@@ -176,6 +176,26 @@ impl Backend for JjBackend {
         bail!("stash not supported for jj backend")
     }
 
+    fn list_branches(&self) -> Result<Vec<super::BranchInfo>> {
+        bail!("branch management not yet supported for jj backend")
+    }
+
+    fn checkout_branch(&self, _name: &str) -> Result<()> {
+        bail!("branch management not yet supported for jj backend")
+    }
+
+    fn create_branch(&self, _name: &str) -> Result<()> {
+        bail!("branch management not yet supported for jj backend")
+    }
+
+    fn delete_branch(&self, _name: &str) -> Result<()> {
+        bail!("branch management not yet supported for jj backend")
+    }
+
+    fn rename_branch(&self, _old: &str, _new: &str) -> Result<()> {
+        bail!("branch management not yet supported for jj backend")
+    }
+
     fn show_commit(&self, hash: &str) -> Result<String> {
         self.run_jj(&["show", "--no-pager", hash])
     }

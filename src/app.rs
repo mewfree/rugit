@@ -3,7 +3,7 @@ use anyhow::Result;
 use crossterm::event::KeyCode;
 use tui_textarea::TextArea;
 
-use crate::backend::{Backend, CommitInfo, FileEntry, FileKind, RepoStatus, StashInfo};
+use crate::backend::{Backend, BranchInfo, CommitInfo, FileEntry, FileKind, RepoStatus, StashInfo};
 
 use crate::config::Config;
 
@@ -30,6 +30,30 @@ pub struct CommitPickerState {
 pub struct StashListState {
     pub stashes: Vec<StashInfo>,
     pub cursor: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum BranchPickerMode {
+    Checkout,
+    Delete,
+}
+
+pub struct BranchPickerState {
+    pub branches: Vec<BranchInfo>,
+    pub cursor: usize,
+    pub mode: BranchPickerMode,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum BranchNameMode {
+    Create,
+    Rename,
+}
+
+pub struct BranchNameInputState {
+    pub input: String,
+    pub mode: BranchNameMode,
+    pub original: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -156,6 +180,8 @@ pub struct App {
     pub commit_picker: Option<CommitPickerState>,
     pub stash_list: Option<StashListState>,
     pub stashes: Vec<StashInfo>,
+    pub branch_picker: Option<BranchPickerState>,
+    pub branch_name_input: Option<BranchNameInputState>,
 }
 
 impl App {
@@ -183,6 +209,8 @@ impl App {
             commit_picker: None,
             stash_list: None,
             stashes,
+            branch_picker: None,
+            branch_name_input: None,
         };
         app.rebuild_items();
         Ok(app)

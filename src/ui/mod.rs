@@ -88,6 +88,21 @@ pub fn render(f: &mut Frame, app: &mut App) {
         popup::render_stash_list(f, area, state);
     }
 
+    // Branch submenu popup
+    if app.pending_key == Some(KeyCode::Char('b')) && app.branch_picker.is_none() && app.branch_name_input.is_none() {
+        popup::render_branch_popup(f, area);
+    }
+
+    // Branch picker popup (checkout / delete)
+    if let Some(ref state) = app.branch_picker {
+        popup::render_branch_picker(f, area, state);
+    }
+
+    // Branch name input popup (create / rename)
+    if let Some(ref state) = app.branch_name_input {
+        popup::render_branch_name_input(f, area, state);
+    }
+
     // Footer
     let footer = Paragraph::new(footer_text)
         .style(Style::new().bg(Color::Rgb(20, 30, 70)).fg(Color::White));
@@ -160,6 +175,8 @@ fn build_footer(app: &App) -> Line<'static> {
             key("[p]"), Span::raw("ush"),
             sep(),
             key("[F]"), Span::raw("pull"),
+            sep(),
+            key("[b]"), Span::raw("ranch"),
             sep(),
             key("[l]"), Span::raw("og"),
             sep(),
