@@ -68,10 +68,10 @@ fn status_item_to_list_item(item: &StatusItem, in_visual: bool) -> ListItem<'sta
 
         StatusItem::File {
             entry,
-            section,
+            section: _,
             is_expanded,
         } => {
-            let color = section_color(section);
+            let color = kind_color(&entry.kind);
             let kind_str = kind_prefix(&entry.kind);
             let suffix = if *is_expanded { "" } else { "…" };
             ListItem::new(Line::from(vec![
@@ -163,6 +163,19 @@ fn section_color(section: &Section) -> Color {
         Section::Staged => COL_STAGED,
         Section::Unstaged => COL_UNSTAGED,
         Section::Untracked => COL_UNTRACKED,
+    }
+}
+
+// Orange — ratatui has no named orange.
+const COL_ORANGE: Color = Color::Rgb(255, 165, 0);
+
+fn kind_color(kind: &FileKind) -> Color {
+    match kind {
+        FileKind::Added | FileKind::Untracked => COL_STAGED, // green: new content
+        FileKind::Modified => COL_ORANGE,                    // orange: changed
+        FileKind::Renamed(_) => COL_RECENT,                  // blue: moved
+        FileKind::Deleted => COL_UNSTAGED,                   // red: gone
+        FileKind::Conflicted => Color::Magenta,              // conflict
     }
 }
 
