@@ -292,8 +292,8 @@ fn run_app(
                                         Ok(_) => {
                                             let _ = app.refresh();
                                             app.status_msg = Some(match picker.mode {
-                                                FixupMode::Fixup  => format!("Fixup commit created targeting {}", hash),
-                                                FixupMode::Squash => format!("Squash commit created targeting {}", hash),
+                                                FixupMode::Fixup  => format!("Fixed up into {}", hash),
+                                                FixupMode::Squash => format!("Squashed into {}", hash),
                                             });
                                         }
                                         Err(e) => {

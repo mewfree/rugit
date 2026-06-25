@@ -20,6 +20,49 @@ impl GitBackend {
         Ok(Self { repo, root })
     }
 
+    /// Non-interactively run `git rebase -i --autosquash` so a just-created
+    /// `fixup!`/`squash!` commit is folded into its target. Targets the parent
+    /// of `hash` so the rebase range includes the target commit itself.
+    fn autosquash_rebase(&self, hash: &str) -> Result<()> {
+        // If the target is the root commit it has no parent, so rebase onto
+        // `--root` instead of `<hash>^`.
+        let has_parent = self
+            .repo
+            .revparse_single(hash)
+            .and_then(|obj| obj.peel_to_commit())
+            .map(|c| c.parent_count() > 0)
+            .unwrap_or(true);
+        let base = if has_parent {
+            format!("{}^", hash)
+        } else {
+            "--root".to_string()
+        };
+        let out = std::process::Command::new("git")
+            .args([
+                "rebase",
+                "-i",
+                "--autosquash",
+                "--autostash",
+                &base,
+            ])
+            // `:` exits 0 without touching the file, so the autosquash-ordered
+            // todo list and the squash commit message are accepted as-is.
+            .env("GIT_SEQUENCE_EDITOR", ":")
+            .env("GIT_EDITOR", ":")
+            .current_dir(&self.root)
+            .output()?;
+        if !out.status.success() {
+            // Don't leave the repo mid-rebase (e.g. on a conflict).
+            let _ = std::process::Command::new("git")
+                .args(["rebase", "--abort"])
+                .current_dir(&self.root)
+                .output();
+            let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            anyhow::bail!("autosquash rebase failed (conflict?); aborted. {}", msg);
+        }
+        Ok(())
+    }
+
     fn upstream_info(&self) -> (Option<String>, Vec<super::CommitInfo>) {
         // Find the upstream for the current branch via git2
         let head = match self.repo.head() {
@@ -476,7 +519,7 @@ impl Backend for GitBackend {
             let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
             anyhow::bail!("{}", msg);
         }
-        Ok(())
+        self.autosquash_rebase(hash)
     }
 
     fn squash_commit(&self, hash: &str) -> Result<()> {
@@ -488,7 +531,7 @@ impl Backend for GitBackend {
             let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
             anyhow::bail!("{}", msg);
         }
-        Ok(())
+        self.autosquash_rebase(hash)
     }
 
     fn show_commit(&self, hash: &str) -> Result<String> {
