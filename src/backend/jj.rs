@@ -144,6 +144,10 @@ impl Backend for JjBackend {
         bail!("jj hunk discard not yet implemented")
     }
 
+    fn discard_patch(&self, _patch: &str) -> Result<()> {
+        bail!("jj hunk discard not yet implemented")
+    }
+
     fn discard_all_unstaged(&self) -> Result<()> {
         bail!("jj write ops not yet implemented")
     }

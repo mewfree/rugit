@@ -781,6 +781,48 @@ impl App {
         Ok(())
     }
 
+    /// Discard all `+`/`-` DiffLines in the visual selection range (unstaged only).
+    pub fn discard_visual_selection(&mut self) -> Result<()> {
+        let anchor = match self.visual_anchor.take() {
+            Some(a) => a,
+            None => return Ok(()),
+        };
+        let (start, end) = if anchor <= self.cursor { (anchor, self.cursor) } else { (self.cursor, anchor) };
+
+        let mut groups: HashMap<(String, usize), HashSet<usize>> = HashMap::new();
+        let mut any_file: Option<String> = None;
+
+        for i in start..=end {
+            if let Some(StatusItem::DiffLine { line, file_path, section, hunk_index, line_in_hunk }) = self.items.get(i) {
+                if *section == Section::Unstaged && (line.starts_with('+') || line.starts_with('-')) {
+                    groups.entry((file_path.clone(), *hunk_index)).or_default().insert(*line_in_hunk);
+                    any_file = Some(file_path.clone());
+                }
+            }
+        }
+
+        if groups.is_empty() {
+            return Ok(());
+        }
+
+        let mut total = 0usize;
+        for ((file_path, hunk_index), line_indices) in &groups {
+            let cache_key = format!("unstaged:{}", file_path);
+            if let Some(diff) = self.diff_cache.get(&cache_key).cloned() {
+                if let Some(patch) = Self::extract_lines_patch(&diff, *hunk_index, line_indices, true) {
+                    self.backend.discard_patch(&patch)?;
+                    total += line_indices.len();
+                }
+            }
+        }
+
+        if let Some(path) = any_file {
+            self.refresh_file_diffs(&path, &Section::Unstaged)?;
+        }
+        self.status_msg = Some(format!("Discarded {} line(s)", total));
+        Ok(())
+    }
+
     pub fn discard_at_cursor(&mut self) -> Result<()> {
         if let Some(item) = self.items.get(self.cursor).cloned() {
             match item {

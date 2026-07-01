@@ -403,7 +403,11 @@ fn run_app(
                         app.pending_key = None;
                     }
                     Action::DiscardFile => {
-                        if let Err(e) = app.discard_at_cursor() {
+                        if app.visual_anchor.is_some() {
+                            if let Err(e) = app.discard_visual_selection() {
+                                app.status_msg = Some(format!("Error: {}", e));
+                            }
+                        } else if let Err(e) = app.discard_at_cursor() {
                             app.status_msg = Some(format!("Error: {}", e));
                         }
                         app.pending_key = None;
