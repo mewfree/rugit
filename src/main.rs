@@ -788,6 +788,10 @@ fn handle_editor_key(app: &mut App, key: crossterm::event::KeyEvent) {
                             // dw: delete word forward
                             state.textarea.delete_next_word();
                         }
+                        KeyCode::Char('$') => {
+                            // d$: delete to end of line
+                            state.textarea.delete_line_by_end();
+                        }
                         _ => {} // any other key cancels
                     }
                 } else if state.pending_g {
