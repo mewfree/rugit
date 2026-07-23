@@ -418,6 +418,54 @@ impl App {
         }
     }
 
+    pub fn move_page_down(&mut self, amount: usize) {
+        if self.buffer == ActiveBuffer::Status {
+            if self.items.is_empty() { return; }
+            let target = (self.cursor + amount).min(self.items.len() - 1);
+            let mut next = target;
+            while next < self.items.len() {
+                match &self.items[next] {
+                    StatusItem::DiffLine { line, .. }
+                        if !line.starts_with('+') && !line.starts_with('-') => { next += 1; }
+                    _ => break,
+                }
+            }
+            if next >= self.items.len() {
+                next = target;
+                while next > self.cursor {
+                    match &self.items[next] {
+                        StatusItem::DiffLine { line, .. }
+                            if !line.starts_with('+') && !line.starts_with('-') => { next -= 1; }
+                        _ => break,
+                    }
+                }
+            }
+            self.cursor = next;
+        } else if self.buffer == ActiveBuffer::Log {
+            if !self.log.is_empty() {
+                self.cursor = (self.cursor + amount).min(self.log.len() - 1);
+            }
+        }
+    }
+
+    pub fn move_page_up(&mut self, amount: usize) {
+        if self.buffer == ActiveBuffer::Status {
+            if self.items.is_empty() { return; }
+            let target = self.cursor.saturating_sub(amount);
+            let mut prev = target;
+            while prev > 0 {
+                match &self.items[prev] {
+                    StatusItem::DiffLine { line, .. }
+                        if !line.starts_with('+') && !line.starts_with('-') => { prev -= 1; }
+                    _ => break,
+                }
+            }
+            self.cursor = prev;
+        } else if self.buffer == ActiveBuffer::Log {
+            self.cursor = self.cursor.saturating_sub(amount);
+        }
+    }
+
     /// Refresh status and diffs for `file_path` after a stage/unstage operation.
     /// `destination` is the section that just received the change — it is always
     /// expanded and re-fetched so the user can see the result immediately.

@@ -382,6 +382,16 @@ fn run_app(
                         app.move_up();
                         app.pending_key = None;
                     }
+                    Action::PageDown => {
+                        let amount = (terminal.size()?.height as usize / 2).max(1);
+                        app.move_page_down(amount);
+                        app.pending_key = None;
+                    }
+                    Action::PageUp => {
+                        let amount = (terminal.size()?.height as usize / 2).max(1);
+                        app.move_page_up(amount);
+                        app.pending_key = None;
+                    }
                     Action::StageFile => {
                         if app.visual_anchor.is_some() {
                             if let Err(e) = app.stage_visual_selection() {
