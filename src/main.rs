@@ -153,6 +153,57 @@ fn run_app(
                     continue;
                 }
 
+                // Handle log search input popup — filters the log list live as you type
+                if app.log_search.is_some() {
+                    match key.code {
+                        KeyCode::Esc => {
+                            app.log_search = None;
+                            app.log_filter = None;
+                            app.cursor = 0;
+                        }
+                        KeyCode::Enter => {
+                            // Keep the filter applied; just close the input prompt
+                            // so j/k browse the filtered list.
+                            app.log_search = None;
+                        }
+                        KeyCode::Backspace => {
+                            if let Some(ref mut input) = app.log_search {
+                                input.pop();
+                            }
+                            app.log_filter = app.log_search.clone();
+                            app.cursor = 0;
+                        }
+                        KeyCode::Char(c) => {
+                            if let Some(ref mut input) = app.log_search {
+                                input.push(c);
+                            }
+                            app.log_filter = app.log_search.clone();
+                            app.cursor = 0;
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
+
+                // '/' starts a log filter; Esc clears an already-applied one (log buffer only)
+                if app.buffer == ActiveBuffer::Log {
+                    match key.code {
+                        KeyCode::Char('/') => {
+                            app.log_search = Some(String::new());
+                            app.log_filter = Some(String::new());
+                            app.cursor = 0;
+                            app.status_msg = None;
+                            continue;
+                        }
+                        KeyCode::Esc if app.log_filter.is_some() => {
+                            app.log_filter = None;
+                            app.cursor = 0;
+                            continue;
+                        }
+                        _ => {}
+                    }
+                }
+
                 // Handle branch name input popup
                 if app.branch_name_input.is_some() {
                     match key.code {
@@ -446,6 +497,7 @@ fn run_app(
                         } else {
                             app.buffer = ActiveBuffer::Log;
                             app.cursor = 0;
+                            app.log_filter = None;
                         }
                         app.pending_key = None;
                     }

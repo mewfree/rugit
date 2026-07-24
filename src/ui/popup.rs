@@ -65,6 +65,8 @@ pub fn render_help(f: &mut Frame, area: Rect) {
         Line::from(""),
         section("  Views & misc"),
         key("  l           ", "Switch to log view"),
+        key("  /           ", "Filter log by hash/author/message (in log view)"),
+        key("  Esc         ", "Clear log filter"),
         key("  g           ", "Refresh"),
         key("  ?           ", "Show this help"),
         key("  q / Esc     ", "Quit / close"),
@@ -472,6 +474,35 @@ pub fn render_branch_name_input(f: &mut Frame, area: Rect, state: &BranchNameInp
         .block(
             Block::default()
                 .title(title)
+                .title_alignment(Alignment::Center)
+                .borders(Borders::ALL)
+                .border_style(Style::new().fg(Color::LightGreen)),
+        )
+        .alignment(Alignment::Left);
+
+    f.render_widget(paragraph, popup_area);
+}
+
+pub fn render_log_search(f: &mut Frame, area: Rect, input: &str) {
+    let popup_area = centered_rect(50, 20, area);
+    f.render_widget(Clear, popup_area);
+
+    let prompt = format!("  /{}_", input);
+
+    let lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(prompt, Style::new().fg(Color::White))),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Enter: keep filter   Esc: cancel",
+            Style::new().fg(Color::DarkGray),
+        )),
+    ];
+
+    let paragraph = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title(" Search log ")
                 .title_alignment(Alignment::Center)
                 .borders(Borders::ALL)
                 .border_style(Style::new().fg(Color::LightGreen)),

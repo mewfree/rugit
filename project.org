@@ -21,7 +21,8 @@ Magit-style: pick a commit from a list, create a fixup or squash commit targetin
 Full-screen diff view, navigable by hunk. Invoked from log buffer (=d= on selected commit) or status buffer (=d= on a file). Syntax-highlighted diff lines.
 
 ** TODO Log buffer improvements
-Current log buffer is minimal. Add: commit graph rendering (=--graph=), author/date columns, filtering (=l f=), searching (=/=), pressing =Enter= to open diff viewer.
+Current log buffer is minimal. Add: commit graph rendering (=--graph=), author/date columns, pressing =Enter= to open diff viewer.
+Filtering (=/=, live narrows list by hash/author/message, =Esc= clears) is DONE — see below.
 
 ** DONE Stash popup (=z=)
 =z z= stash, =z p= pop, =z a= apply, =z d= drop, =z l= list stashes. Stash list UI with navigate + apply/pop/drop actions.
@@ -67,3 +68,4 @@ Implement all Backend trait methods using =jj= subprocess calls.
 ** DONE Log buffer (=l=) with navigation
 ** DONE Help popup (=?=)
 ** DONE Display more commits in Recent commits (configurable via =recent_limit= in config.toml, default 10)
+** DONE Log buffer filter (=/= to filter live by hash/author/summary, =Esc= to clear)

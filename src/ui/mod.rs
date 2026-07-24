@@ -103,6 +103,11 @@ pub fn render(f: &mut Frame, app: &mut App) {
         popup::render_branch_name_input(f, area, state);
     }
 
+    // Log search input popup
+    if let Some(ref input) = app.log_search {
+        popup::render_log_search(f, area, input);
+    }
+
     // Footer
     let footer = Paragraph::new(footer_text)
         .style(Style::new().bg(Color::Rgb(20, 30, 70)).fg(Color::White));

@@ -9,8 +9,9 @@ use ratatui::{
 use crate::app::App;
 
 pub fn render_log(f: &mut Frame, app: &mut App, area: Rect) {
-    let items: Vec<ListItem> = app
-        .log
+    let commits = app.log_filtered_commits();
+
+    let items: Vec<ListItem> = commits
         .iter()
         .map(|commit| {
             let line = Line::from(vec![
@@ -28,8 +29,18 @@ pub fn render_log(f: &mut Frame, app: &mut App, area: Rect) {
         })
         .collect();
 
+    let block = match app.log_filter.as_deref() {
+        Some(query) if !query.is_empty() => Block::default().title(format!(
+            " /{} ({} match{}) — Esc to clear ",
+            query,
+            commits.len(),
+            if commits.len() == 1 { "" } else { "es" }
+        )),
+        _ => Block::default(),
+    };
+
     let list = List::new(items)
-        .block(Block::default())
+        .block(block)
         .highlight_style(
             Style::new()
                 .bg(Color::DarkGray)
@@ -37,7 +48,7 @@ pub fn render_log(f: &mut Frame, app: &mut App, area: Rect) {
         );
 
     let mut state = ListState::default();
-    if !app.log.is_empty() {
+    if !commits.is_empty() {
         state.select(Some(app.cursor));
     }
 

@@ -182,6 +182,11 @@ pub struct App {
     pub stashes: Vec<StashInfo>,
     pub branch_picker: Option<BranchPickerState>,
     pub branch_name_input: Option<BranchNameInputState>,
+    /// Text currently being typed into the log search prompt (Some while typing)
+    pub log_search: Option<String>,
+    /// Active filter query narrowing the log view; set live while typing and
+    /// stays applied after confirming so j/k browse the filtered list.
+    pub log_filter: Option<String>,
 }
 
 impl App {
@@ -211,6 +216,8 @@ impl App {
             stashes,
             branch_picker: None,
             branch_name_input: None,
+            log_search: None,
+            log_filter: None,
         };
         app.rebuild_items();
         Ok(app)
@@ -395,7 +402,8 @@ impl App {
                 self.cursor = next;
             }
         } else if self.buffer == ActiveBuffer::Log {
-            if !self.log.is_empty() && self.cursor + 1 < self.log.len() {
+            let len = self.log_filtered_commits().len();
+            if len > 0 && self.cursor + 1 < len {
                 self.cursor += 1;
             }
         }
@@ -442,8 +450,9 @@ impl App {
             }
             self.cursor = next;
         } else if self.buffer == ActiveBuffer::Log {
-            if !self.log.is_empty() {
-                self.cursor = (self.cursor + amount).min(self.log.len() - 1);
+            let len = self.log_filtered_commits().len();
+            if len > 0 {
+                self.cursor = (self.cursor + amount).min(len - 1);
             }
         }
     }
@@ -1006,5 +1015,24 @@ impl App {
     pub fn load_log(&mut self) -> Result<()> {
         self.log = self.backend.log(self.config.log_limit)?;
         Ok(())
+    }
+
+    /// The commits currently visible in the log buffer: all of `self.log`,
+    /// or the subset matching `log_filter` (hash/author/summary, case-insensitive).
+    pub fn log_filtered_commits(&self) -> Vec<&CommitInfo> {
+        match self.log_filter.as_deref() {
+            Some(query) if !query.is_empty() => {
+                let query = query.to_lowercase();
+                self.log
+                    .iter()
+                    .filter(|c| {
+                        c.summary.to_lowercase().contains(&query)
+                            || c.author.to_lowercase().contains(&query)
+                            || c.short_hash.to_lowercase().contains(&query)
+                    })
+                    .collect()
+            }
+            _ => self.log.iter().collect(),
+        }
     }
 }
