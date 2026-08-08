@@ -44,7 +44,10 @@ pub struct RepoStatus {
     pub staged: Vec<FileEntry>,
     pub unstaged: Vec<FileEntry>,
     pub untracked: Vec<FileEntry>,
+    /// Capped for display; see `unpushed_total` for the real count.
     pub unpushed: Vec<CommitInfo>,
+    /// Real count, even when `unpushed` is truncated.
+    pub unpushed_total: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -72,6 +75,13 @@ pub trait Backend {
     fn status(&self) -> Result<RepoStatus>;
     fn diff_file(&self, path: &str, staged: bool) -> Result<String>;
     fn stage_file(&self, path: &str) -> Result<()>;
+    /// Override to avoid rewriting the whole index once per path.
+    fn stage_files(&self, paths: &[String]) -> Result<()> {
+        for path in paths {
+            self.stage_file(path)?;
+        }
+        Ok(())
+    }
     fn unstage_file(&self, path: &str) -> Result<()>;
     fn discard_file(&self, path: &str) -> Result<()>;
     fn stage_all(&self) -> Result<()>;

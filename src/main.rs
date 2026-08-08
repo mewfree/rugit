@@ -67,10 +67,18 @@ fn run_app(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
 ) -> Result<()> {
+    // Redraw only after an event; otherwise we rebuild every widget 4x/second idle.
+    let mut needs_redraw = true;
+
     loop {
-        terminal.draw(|f| ui::render(f, app))?;
+        if needs_redraw {
+            terminal.draw(|f| ui::render(f, app))?;
+            needs_redraw = false;
+        }
 
         if event::poll(std::time::Duration::from_millis(250))? {
+            // Key, mouse or resize can all change the screen.
+            needs_redraw = true;
             match event::read()? {
             Event::Mouse(mouse) => {
                 match mouse.kind {
@@ -158,7 +166,7 @@ fn run_app(
                     match key.code {
                         KeyCode::Esc => {
                             app.log_search = None;
-                            app.log_filter = None;
+                            app.set_log_filter(None);
                             app.cursor = 0;
                         }
                         KeyCode::Enter => {
@@ -170,14 +178,16 @@ fn run_app(
                             if let Some(ref mut input) = app.log_search {
                                 input.pop();
                             }
-                            app.log_filter = app.log_search.clone();
+                            let q = app.log_search.clone();
+                            app.set_log_filter(q);
                             app.cursor = 0;
                         }
                         KeyCode::Char(c) => {
                             if let Some(ref mut input) = app.log_search {
                                 input.push(c);
                             }
-                            app.log_filter = app.log_search.clone();
+                            let q = app.log_search.clone();
+                            app.set_log_filter(q);
                             app.cursor = 0;
                         }
                         _ => {}
@@ -190,13 +200,13 @@ fn run_app(
                     match key.code {
                         KeyCode::Char('/') => {
                             app.log_search = Some(String::new());
-                            app.log_filter = Some(String::new());
+                            app.set_log_filter(Some(String::new()));
                             app.cursor = 0;
                             app.status_msg = None;
                             continue;
                         }
                         KeyCode::Esc if app.log_filter.is_some() => {
-                            app.log_filter = None;
+                            app.set_log_filter(None);
                             app.cursor = 0;
                             continue;
                         }
@@ -497,7 +507,7 @@ fn run_app(
                         } else {
                             app.buffer = ActiveBuffer::Log;
                             app.cursor = 0;
-                            app.log_filter = None;
+                            app.set_log_filter(None);
                         }
                         app.pending_key = None;
                     }

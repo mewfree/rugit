@@ -187,6 +187,9 @@ pub struct App {
     /// Active filter query narrowing the log view; set live while typing and
     /// stays applied after confirming so j/k browse the filtered list.
     pub log_filter: Option<String>,
+    /// Indices into `log` matching `log_filter`. Set via `set_log_filter`;
+    /// recomputed on change rather than every keystroke and frame.
+    log_filtered: Vec<usize>,
 }
 
 impl App {
@@ -218,6 +221,7 @@ impl App {
             branch_name_input: None,
             log_search: None,
             log_filter: None,
+            log_filtered: Vec::new(),
         };
         app.rebuild_items();
         Ok(app)
@@ -356,7 +360,8 @@ impl App {
             if items.len() > 1 { items.push(StatusItem::Spacer); }
             let upstream = self.status.upstream.clone().unwrap_or_else(|| "upstream".to_string());
             items.push(StatusItem::UnpushedHeader {
-                count: self.status.unpushed.len(),
+                // `unpushed` is capped; show the real total.
+                count: self.status.unpushed_total.max(self.status.unpushed.len()),
                 upstream,
             });
             for info in &self.status.unpushed {
@@ -402,7 +407,7 @@ impl App {
                 self.cursor = next;
             }
         } else if self.buffer == ActiveBuffer::Log {
-            let len = self.log_filtered_commits().len();
+            let len = self.log_visible_len();
             if len > 0 && self.cursor + 1 < len {
                 self.cursor += 1;
             }
@@ -450,7 +455,7 @@ impl App {
             }
             self.cursor = next;
         } else if self.buffer == ActiveBuffer::Log {
-            let len = self.log_filtered_commits().len();
+            let len = self.log_visible_len();
             if len > 0 {
                 self.cursor = (self.cursor + amount).min(len - 1);
             }
@@ -485,8 +490,8 @@ impl App {
         self.diff_cache.remove(&staged_key);
         self.diff_cache.remove(&unstaged_key);
 
+        // Only the index/worktree moved; no need to re-walk the commit list.
         self.status = self.backend.status()?;
-        self.recent_commits = self.backend.log(self.config.recent_limit).unwrap_or_default();
 
         let want_staged   = *destination == Section::Staged
             || self.expanded.contains(&staged_key);
@@ -649,18 +654,14 @@ impl App {
                     match section {
                         Section::Unstaged => {
                             let paths: Vec<String> = self.status.unstaged.iter().map(|e| e.path.clone()).collect();
-                            for path in &paths {
-                                self.backend.stage_file(path)?;
-                            }
+                            self.backend.stage_files(&paths)?;
                             self.diff_cache.clear();
                             self.refresh()?;
                             self.status_msg = Some("Staged all unstaged changes".to_string());
                         }
                         Section::Untracked => {
                             let paths: Vec<String> = self.status.untracked.iter().map(|e| e.path.clone()).collect();
-                            for path in &paths {
-                                self.backend.stage_file(path)?;
-                            }
+                            self.backend.stage_files(&paths)?;
                             self.diff_cache.clear();
                             self.refresh()?;
                             self.status_msg = Some("Staged all untracked files".to_string());
@@ -936,9 +937,8 @@ impl App {
                     if section == Section::Unstaged {
                         let key = self.file_key(&section, &file_path);
                         self.backend.discard_hunk(&file_path, hunk_index)?;
-                        // Re-fetch the diff so remaining hunks stay visible
+                        // Re-fetch the diff so remaining hunks stay visible.
                         self.status = self.backend.status()?;
-                        self.recent_commits = self.backend.log(self.config.recent_limit).unwrap_or_default();
                         if self.status.unstaged.iter().any(|e| e.path == file_path) {
                             if let Ok(new_diff) = self.backend.diff_file(&file_path, false) {
                                 self.diff_cache.insert(key, new_diff);
@@ -1014,25 +1014,43 @@ impl App {
 
     pub fn load_log(&mut self) -> Result<()> {
         self.log = self.backend.log(self.config.log_limit)?;
+        self.rebuild_log_filter();
         Ok(())
     }
 
-    /// The commits currently visible in the log buffer: all of `self.log`,
-    /// or the subset matching `log_filter` (hash/author/summary, case-insensitive).
-    pub fn log_filtered_commits(&self) -> Vec<&CommitInfo> {
-        match self.log_filter.as_deref() {
+    /// Set or clear the log filter, recomputing the match list.
+    pub fn set_log_filter(&mut self, filter: Option<String>) {
+        self.log_filter = filter;
+        self.rebuild_log_filter();
+    }
+
+    /// Match on hash/author/summary, case-insensitive.
+    fn rebuild_log_filter(&mut self) {
+        self.log_filtered = match self.log_filter.as_deref() {
             Some(query) if !query.is_empty() => {
                 let query = query.to_lowercase();
                 self.log
                     .iter()
-                    .filter(|c| {
+                    .enumerate()
+                    .filter(|(_, c)| {
                         c.summary.to_lowercase().contains(&query)
                             || c.author.to_lowercase().contains(&query)
                             || c.short_hash.to_lowercase().contains(&query)
                     })
+                    .map(|(i, _)| i)
                     .collect()
             }
-            _ => self.log.iter().collect(),
-        }
+            _ => (0..self.log.len()).collect(),
+        };
+    }
+
+    /// Number of commits currently visible in the log buffer.
+    pub fn log_visible_len(&self) -> usize {
+        self.log_filtered.len()
+    }
+
+    /// The commits currently visible in the log buffer, in display order.
+    pub fn log_visible(&self) -> impl Iterator<Item = &CommitInfo> + '_ {
+        self.log_filtered.iter().filter_map(move |&i| self.log.get(i))
     }
 }

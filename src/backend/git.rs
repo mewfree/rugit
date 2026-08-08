@@ -63,18 +63,21 @@ impl GitBackend {
         Ok(())
     }
 
-    fn upstream_info(&self) -> (Option<String>, Vec<super::CommitInfo>) {
+    /// Cap on unpushed commits we parse. The walk still counts them all.
+    const UNPUSHED_DISPLAY_LIMIT: usize = 100;
+
+    fn upstream_info(&self) -> (Option<String>, Vec<super::CommitInfo>, usize) {
         // Find the upstream for the current branch via git2
         let head = match self.repo.head() {
             Ok(h) => h,
-            Err(_) => return (None, vec![]),
+            Err(_) => return (None, vec![], 0),
         };
         let branch = match git2::Branch::wrap(head) {
             b => b,
         };
         let upstream_branch = match branch.upstream() {
             Ok(u) => u,
-            Err(_) => return (None, vec![]),
+            Err(_) => return (None, vec![], 0),
         };
         let upstream_name = upstream_branch
             .name()
@@ -83,21 +86,26 @@ impl GitBackend {
             .map(String::from);
         let upstream_oid = match upstream_branch.get().peel_to_commit() {
             Ok(c) => c.id(),
-            Err(_) => return (upstream_name, vec![]),
+            Err(_) => return (upstream_name, vec![], 0),
         };
 
         // Collect commits reachable from HEAD but not from upstream
         let mut walk = match self.repo.revwalk() {
             Ok(w) => w,
-            Err(_) => return (upstream_name, vec![]),
+            Err(_) => return (upstream_name, vec![], 0),
         };
-        if walk.push_head().is_err() { return (upstream_name, vec![]); }
-        if walk.hide(upstream_oid).is_err() { return (upstream_name, vec![]); }
+        if walk.push_head().is_err() { return (upstream_name, vec![], 0); }
+        if walk.hide(upstream_oid).is_err() { return (upstream_name, vec![], 0); }
         let _ = walk.set_sorting(git2::Sort::TIME);
 
         let mut commits = Vec::new();
+        let mut total = 0usize;
         for oid_result in walk {
             let oid = match oid_result { Ok(o) => o, Err(_) => break };
+            total += 1;
+            if commits.len() >= Self::UNPUSHED_DISPLAY_LIMIT {
+                continue;
+            }
             let commit = match self.repo.find_commit(oid) { Ok(c) => c, Err(_) => break };
             commits.push(super::CommitInfo {
                 short_hash: format!("{:.7}", commit.id()),
@@ -105,7 +113,7 @@ impl GitBackend {
                 author: commit.author().name().unwrap_or("").to_string(),
             });
         }
-        (upstream_name, commits)
+        (upstream_name, commits, total)
     }
 
     fn head_info(&self) -> (Option<String>, Option<String>, Option<String>) {
@@ -211,7 +219,7 @@ impl Backend for GitBackend {
         }
 
         let (head, head_short_hash, head_summary) = self.head_info();
-        let (upstream, unpushed) = self.upstream_info();
+        let (upstream, unpushed, unpushed_total) = self.upstream_info();
 
         Ok(RepoStatus {
             head,
@@ -222,6 +230,7 @@ impl Backend for GitBackend {
             unstaged,
             untracked,
             unpushed,
+            unpushed_total,
         })
     }
 
@@ -260,6 +269,20 @@ impl Backend for GitBackend {
             index.add_path(Path::new(path))?;
         } else {
             index.remove_path(Path::new(path))?;
+        }
+        index.write()?;
+        Ok(())
+    }
+
+    /// One index read/write for all paths, vs one per path in a `stage_file` loop.
+    fn stage_files(&self, paths: &[String]) -> Result<()> {
+        let mut index = self.repo.index()?;
+        for path in paths {
+            if self.root.join(path).exists() {
+                index.add_path(Path::new(path))?;
+            } else {
+                index.remove_path(Path::new(path))?;
+            }
         }
         index.write()?;
         Ok(())
@@ -612,23 +635,22 @@ impl Backend for GitBackend {
         Ok(())
     }
 
+    /// Reads `refs/stash`'s reflog; `git stash list` would fork on every refresh.
+    /// Summaries omit the `stash@{N}: ` prefix; callers add it.
     fn stash_list(&self) -> Result<Vec<super::StashInfo>> {
-        let out = std::process::Command::new("git")
-            .args(["stash", "list", "--format=%gd: %s"])
-            .current_dir(&self.root)
-            .output()?;
-        if !out.status.success() {
-            anyhow::bail!("{}", String::from_utf8_lossy(&out.stderr).trim());
-        }
-        let text = String::from_utf8_lossy(&out.stdout);
-        let mut stashes = Vec::new();
-        for (i, line) in text.lines().enumerate() {
-            stashes.push(super::StashInfo {
+        // No stash ref is the common case, not an error.
+        let reflog = match self.repo.reflog("refs/stash") {
+            Ok(r) => r,
+            Err(_) => return Ok(Vec::new()),
+        };
+        Ok(reflog
+            .iter()
+            .enumerate()
+            .map(|(i, entry)| super::StashInfo {
                 index: i,
-                summary: line.to_string(),
-            });
-        }
-        Ok(stashes)
+                summary: entry.message().unwrap_or("").to_string(),
+            })
+            .collect())
     }
 
     fn list_branches(&self) -> Result<Vec<super::BranchInfo>> {

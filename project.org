@@ -43,6 +43,15 @@ Implement all Backend trait methods using =jj= subprocess calls.
 
 * Done
 
+** DONE Performance pass (idle redraws, windowed status render, batched staging, fewer git walks)
+Windowed status rendering so per-frame work scales with the viewport rather than
+the item count; redraw only after an event instead of 4x/second while idle;
+batched =stage_files= so staging a section writes the index once; dropped
+redundant =log()= re-walks from staging/discard paths; =stash_list= via the
+=refs/stash= reflog instead of a =git= subprocess; capped the unpushed revwalk at
+100 materialised commits (=unpushed_total= keeps the header count exact); cached
+the log filter match list.
+
 ** DONE Discard keybinding (=x= on unstaged/untracked file)
 ** DONE Scaffold Cargo project (Cargo.toml, directory layout)
 ** DONE Backend trait and shared data model

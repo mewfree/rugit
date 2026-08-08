@@ -321,7 +321,10 @@ pub fn render_stash_list(f: &mut Frame, area: Rect, state: &StashListState) {
         } else {
             Style::new()
         };
-        lines.push(Line::from(Span::styled(format!("{}{}", prefix, stash.summary), style)));
+        lines.push(Line::from(Span::styled(
+            format!("{}stash@{{{}}}: {}", prefix, stash.index, stash.summary),
+            style,
+        )));
     }
 
     lines.push(Line::from(""));
