@@ -35,7 +35,21 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let config = Config::load();
 
-    let backend = detect_backend(&cli.path, cli.backend, &config)?;
+    let backend = match detect_backend(&cli.path, cli.backend, &config) {
+        Ok(backend) => backend,
+        Err(err) => {
+            let cwd = std::fs::canonicalize(&cli.path).unwrap_or_else(|_| cli.path.clone().into());
+            eprintln!("rugit: no git repository found in {}", cwd.display());
+            eprintln!();
+            eprintln!("Run rugit from inside a git repository, or create one here with:");
+            eprintln!("  git init");
+            if std::env::var("RUGIT_DEBUG").is_ok() {
+                eprintln!();
+                eprintln!("Details: {err:?}");
+            }
+            std::process::exit(1);
+        }
+    };
     let mut app = App::new(backend, config)?;
 
     // Set up terminal
