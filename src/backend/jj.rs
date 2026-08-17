@@ -153,6 +153,14 @@ impl Backend for JjBackend {
         bail!("jj write ops not yet implemented")
     }
 
+    fn discard_staged_file(&self, _path: &str) -> Result<()> {
+        bail!("jj write ops not yet implemented")
+    }
+
+    fn discard_all_staged(&self) -> Result<()> {
+        bail!("jj write ops not yet implemented")
+    }
+
     fn fixup_commit(&self, _hash: &str) -> Result<()> {
         bail!("fixup not supported for jj backend")
     }

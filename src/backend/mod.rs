@@ -98,6 +98,8 @@ pub trait Backend {
     fn discard_patch(&self, patch: &str) -> Result<()>;
     fn discard_hunk(&self, path: &str, hunk_index: usize) -> Result<()>;
     fn discard_all_unstaged(&self) -> Result<()>;
+    fn discard_staged_file(&self, path: &str) -> Result<()>;
+    fn discard_all_staged(&self) -> Result<()>;
     fn fixup_commit(&self, hash: &str) -> Result<()>;
     fn squash_commit(&self, hash: &str) -> Result<()>;
     fn stash(&self) -> Result<()>;

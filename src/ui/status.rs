@@ -246,6 +246,8 @@ mod tests {
             discard_patch(&str) -> Result<()>;
             discard_hunk(&str, usize) -> Result<()>;
             discard_all_unstaged() -> Result<()>;
+            discard_staged_file(&str) -> Result<()>;
+            discard_all_staged() -> Result<()>;
             fixup_commit(&str) -> Result<()>;
             squash_commit(&str) -> Result<()>;
             stash() -> Result<()>;

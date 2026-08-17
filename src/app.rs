@@ -903,7 +903,10 @@ impl App {
                             self.status_msg = Some(format!("Deleted: {}", entry.path));
                         }
                         Section::Staged => {
-                            self.status_msg = Some(format!("{} is staged — unstage first", entry.path));
+                            self.backend.discard_staged_file(&entry.path)?;
+                            self.diff_cache.remove(&self.file_key(&section, &entry.path));
+                            self.refresh()?;
+                            self.status_msg = Some(format!("Discarded: {}", entry.path));
                         }
                     }
                 }
@@ -929,7 +932,10 @@ impl App {
                             self.status_msg = Some("Deleted all untracked files".to_string());
                         }
                         Section::Staged => {
-                            self.status_msg = Some("Cannot discard staged changes — unstage first".to_string());
+                            self.backend.discard_all_staged()?;
+                            self.diff_cache.clear();
+                            self.refresh()?;
+                            self.status_msg = Some("Discarded all staged changes".to_string());
                         }
                     }
                 }

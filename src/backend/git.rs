@@ -520,6 +520,30 @@ impl Backend for GitBackend {
         Ok(())
     }
 
+    fn discard_staged_file(&self, path: &str) -> Result<()> {
+        let out = std::process::Command::new("git")
+            .args(["restore", "--staged", "--worktree", "--", path])
+            .current_dir(&self.root)
+            .output()?;
+        if !out.status.success() {
+            let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            anyhow::bail!("{}", msg);
+        }
+        Ok(())
+    }
+
+    fn discard_all_staged(&self) -> Result<()> {
+        let out = std::process::Command::new("git")
+            .args(["restore", "--staged", "--worktree", "."])
+            .current_dir(&self.root)
+            .output()?;
+        if !out.status.success() {
+            let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            anyhow::bail!("{}", msg);
+        }
+        Ok(())
+    }
+
     fn discard_hunk(&self, path: &str, hunk_index: usize) -> Result<()> {
         use std::io::Write;
         // Get a fresh diff via subprocess so the patch format exactly matches
