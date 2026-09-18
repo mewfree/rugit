@@ -85,6 +85,11 @@ impl EditorState {
         // Remove default block borders and cursor-line underline
         textarea.set_block(ratatui::widgets::Block::default());
         textarea.set_cursor_line_style(ratatui::style::Style::default());
+        // We drive the real terminal cursor ourselves (see ui/editor.rs) so its
+        // shape can switch between a block (Normal) and a bar (Insert), like
+        // (neo)vim. Disable tui-textarea's own fake highlighted-cell cursor so
+        // the two don't overlap.
+        textarea.set_cursor_style(ratatui::style::Style::default());
         // Position cursor at end of first line (matching original behavior)
         textarea.input(crossterm::event::KeyEvent::new(
             crossterm::event::KeyCode::End,

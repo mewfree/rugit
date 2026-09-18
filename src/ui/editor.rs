@@ -5,6 +5,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
     Frame,
 };
+use unicode_width::UnicodeWidthChar;
 
 use crate::app::{EditorMode, EditorState};
 
@@ -48,6 +49,22 @@ pub fn render_editor(f: &mut Frame, area: Rect, state: &EditorState) {
 
     // Render textarea (no block — we drew the outer block manually)
     f.render_widget(&state.textarea, inner_chunks[0]);
+
+    // Place the real terminal cursor over the textarea's cursor so we can switch
+    // its shape (thin bar in Insert, block in Normal) like (neo)vim.
+    let (cursor_row, cursor_col) = state.textarea.cursor();
+    if let Some(line) = state.textarea.lines().get(cursor_row) {
+        let col_width: u16 = line
+            .chars()
+            .take(cursor_col)
+            .map(|c| UnicodeWidthChar::width(c).unwrap_or(0) as u16)
+            .sum();
+        let x = inner_chunks[0].x.saturating_add(col_width);
+        let y = inner_chunks[0].y.saturating_add(cursor_row as u16);
+        if inner_chunks[0].width > 0 && x < inner_chunks[0].x + inner_chunks[0].width {
+            f.set_cursor_position((x, y));
+        }
+    }
 
     // Render comments greyed out
     if comments_height > 0 {

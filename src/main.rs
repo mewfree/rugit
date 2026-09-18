@@ -2,6 +2,7 @@ use std::io;
 use anyhow::Result;
 use clap::Parser;
 use crossterm::{
+    cursor::SetCursorStyle,
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -14,7 +15,7 @@ mod keybindings;
 mod backend;
 mod ui;
 
-use app::{ActiveBuffer, App, BranchNameInputState, BranchNameMode, BranchPickerMode, BranchPickerState, CommitPickerState, EditorState, FixupMode, StashListState};
+use app::{ActiveBuffer, App, BranchNameInputState, BranchNameMode, BranchPickerMode, BranchPickerState, CommitPickerState, EditorMode, EditorState, FixupMode, StashListState};
 use backend::{detect_backend, BackendKind};
 use config::Config;
 use keybindings::{key_to_action, Action};
@@ -65,6 +66,7 @@ fn main() -> Result<()> {
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
+        SetCursorStyle::DefaultUserShape,
         LeaveAlternateScreen,
         DisableMouseCapture
     )?;
@@ -77,6 +79,25 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+/// Draws the app and, when the commit-message editor is focused, switches the
+/// real terminal cursor to a thin bar in Insert mode or a block in Normal
+/// mode — matching (neo)vim's cursor behavior.
+fn draw(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    app: &mut App,
+) -> Result<()> {
+    terminal.draw(|f| ui::render(f, app))?;
+    let style = match (&app.buffer, &app.editor) {
+        (ActiveBuffer::Editor, Some(editor)) => match editor.mode {
+            EditorMode::Insert => SetCursorStyle::SteadyBar,
+            EditorMode::Normal => SetCursorStyle::SteadyBlock,
+        },
+        _ => SetCursorStyle::DefaultUserShape,
+    };
+    execute!(terminal.backend_mut(), style)?;
+    Ok(())
+}
+
 fn run_app(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
@@ -86,7 +107,7 @@ fn run_app(
 
     loop {
         if needs_redraw {
-            terminal.draw(|f| ui::render(f, app))?;
+            draw(terminal, app)?;
             needs_redraw = false;
         }
 
@@ -611,7 +632,7 @@ fn run_app(
                     Action::Push => {
                         app.pending_key = None;
                         app.status_msg = Some("Pushing…".to_string());
-                        terminal.draw(|f| ui::render(f, app))?;
+                        draw(terminal, app)?;
                         match app.backend.push() {
                             Ok(_)  => app.status_msg = Some("Pushed.".to_string()),
                             Err(e) => app.status_msg = Some(format!("Push failed: {}", first_line(&e.to_string()))),
@@ -621,7 +642,7 @@ fn run_app(
                     Action::PushForce => {
                         app.pending_key = None;
                         app.status_msg = Some("Force-pushing…".to_string());
-                        terminal.draw(|f| ui::render(f, app))?;
+                        draw(terminal, app)?;
                         match app.backend.push_force_lease() {
                             Ok(_)  => app.status_msg = Some("Force-pushed.".to_string()),
                             Err(e) => app.status_msg = Some(format!("Force-push failed: {}", first_line(&e.to_string()))),
@@ -631,7 +652,7 @@ fn run_app(
                     Action::Pull => {
                         app.pending_key = None;
                         app.status_msg = Some("Pulling…".to_string());
-                        terminal.draw(|f| ui::render(f, app))?;
+                        draw(terminal, app)?;
                         match app.backend.pull() {
                             Ok(_)  => app.status_msg = Some("Pulled.".to_string()),
                             Err(e) => app.status_msg = Some(format!("Pull failed: {}", first_line(&e.to_string()))),

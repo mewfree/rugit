@@ -1383,6 +1383,7 @@ dependencies = [
  "similar",
  "toml",
  "tui-textarea-2",
+ "unicode-width",
 ]
 
 [[package]]

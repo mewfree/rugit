@@ -17,3 +17,4 @@ serde      = { version = "1", features = ["derive"] }
 similar    = { version = "2", features = ["text"] }
 toml       = "0.8"
 tui-textarea = { package = "tui-textarea-2", version = "0.10.2", features = ["crossterm"] }
+unicode-width = "0.2"
