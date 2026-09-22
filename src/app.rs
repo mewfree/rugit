@@ -19,6 +19,16 @@ pub enum ActiveBuffer {
 pub enum FixupMode {
     Fixup,
     Squash,
+    Reword,
+}
+
+/// What saving the commit editor should do.
+#[derive(Debug, Clone, PartialEq)]
+pub enum EditorIntent {
+    Commit,
+    Amend,
+    /// Rewrite this commit's message and replay the commits after it.
+    Reword { hash: String },
 }
 
 pub struct CommitPickerState {
@@ -71,11 +81,11 @@ pub struct EditorState {
     pub pending_ctrl_c: bool,
     pub pending_d: bool,
     pub pending_g: bool,
-    pub is_amend: bool,
+    pub intent: EditorIntent,
 }
 
 impl EditorState {
-    pub fn new(title: String, initial_message: String, comments: Vec<String>, is_amend: bool) -> Self {
+    pub fn new(title: String, initial_message: String, comments: Vec<String>, intent: EditorIntent) -> Self {
         let lines: Vec<String> = if initial_message.is_empty() {
             vec![String::new()]
         } else {
@@ -104,7 +114,7 @@ impl EditorState {
             pending_ctrl_c: false,
             pending_d: false,
             pending_g: false,
-            is_amend,
+            intent,
         }
     }
 

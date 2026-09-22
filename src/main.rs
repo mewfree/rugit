@@ -15,7 +15,7 @@ mod keybindings;
 mod backend;
 mod ui;
 
-use app::{ActiveBuffer, App, BranchNameInputState, BranchNameMode, BranchPickerMode, BranchPickerState, CommitPickerState, EditorMode, EditorState, FixupMode, StashListState};
+use app::{ActiveBuffer, App, BranchNameInputState, BranchNameMode, BranchPickerMode, BranchPickerState, CommitPickerState, EditorIntent, EditorMode, EditorState, FixupMode, StashListState};
 use backend::{detect_backend, BackendKind};
 use config::Config;
 use keybindings::{key_to_action, Action};
@@ -380,20 +380,20 @@ fn run_app(
                             if let Some(picker) = app.commit_picker.take() {
                                 if let Some(commit) = picker.commits.get(picker.cursor) {
                                     let hash = commit.short_hash.clone();
-                                    let result = match picker.mode {
-                                        FixupMode::Fixup  => app.backend.fixup_commit(&hash),
-                                        FixupMode::Squash => app.backend.squash_commit(&hash),
-                                    };
-                                    match result {
-                                        Ok(_) => {
-                                            let _ = app.refresh();
-                                            app.status_msg = Some(match picker.mode {
-                                                FixupMode::Fixup  => format!("Fixed up into {}", hash),
-                                                FixupMode::Squash => format!("Squashed into {}", hash),
-                                            });
+                                    let summary = commit.summary.clone();
+                                    match picker.mode {
+                                        FixupMode::Reword => {
+                                            if let Err(e) = do_reword(app, &hash, &summary) {
+                                                app.status_msg = Some(format!("Error: {}", e));
+                                            }
                                         }
-                                        Err(e) => {
-                                            app.status_msg = Some(format!("Error: {}", e));
+                                        FixupMode::Fixup => {
+                                            let result = app.backend.fixup_commit(&hash);
+                                            finish_instant(app, result, format!("Fixed up into {}", hash));
+                                        }
+                                        FixupMode::Squash => {
+                                            let result = app.backend.squash_commit(&hash);
+                                            finish_instant(app, result, format!("Squashed into {}", hash));
                                         }
                                     }
                                 }
@@ -625,6 +625,24 @@ fn run_app(
                             }
                         }
                     }
+                    Action::RewordPick => {
+                        app.pending_key = None;
+                        match app.backend.log(app.config.log_limit) {
+                            Ok(commits) if !commits.is_empty() => {
+                                app.commit_picker = Some(CommitPickerState {
+                                    commits,
+                                    cursor: 0,
+                                    mode: FixupMode::Reword,
+                                });
+                            }
+                            Ok(_) => {
+                                app.status_msg = Some("No commits to reword".to_string());
+                            }
+                            Err(e) => {
+                                app.status_msg = Some(format!("Error loading commits: {}", e));
+                            }
+                        }
+                    }
                     Action::PushBegin => {
                         app.pending_key = Some(crossterm::event::KeyCode::Char('p'));
                         app.status_msg = Some("P-".to_string());
@@ -786,6 +804,16 @@ fn run_app(
     Ok(())
 }
 
+fn finish_instant(app: &mut App, result: Result<()>, ok_msg: String) {
+    match result {
+        Ok(_) => {
+            let _ = app.refresh();
+            app.status_msg = Some(ok_msg);
+        }
+        Err(e) => app.status_msg = Some(format!("Error: {}", e)),
+    }
+}
+
 /// Open the inline TUI commit editor for a new commit.
 fn do_commit(app: &mut App) {
     let comments = get_staged_summary(app);
@@ -800,7 +828,7 @@ fn do_commit(app: &mut App) {
         "Commit Message".to_string(),
         String::new(),
         comment_lines,
-        false,
+        EditorIntent::Commit,
     ));
     app.buffer = ActiveBuffer::Editor;
 }
@@ -821,7 +849,29 @@ fn do_commit_amend(app: &mut App) -> Result<()> {
         "Amend Commit".to_string(),
         last_message,
         comment_lines,
-        true,
+        EditorIntent::Amend,
+    ));
+    app.buffer = ActiveBuffer::Editor;
+    Ok(())
+}
+
+/// Open the inline editor to rewrite an earlier commit's message.
+fn do_reword(app: &mut App, hash: &str, summary: &str) -> Result<()> {
+    if !app.status.staged.is_empty() {
+        anyhow::bail!("cannot reword while the index has staged changes");
+    }
+    let message = app.backend.commit_message(hash)?;
+    let comment_lines = vec![
+        format!("Reword {hash} {summary}."),
+        "Only the message changes. Later commits are replayed.".to_string(),
+        "Staged changes are not included.".to_string(),
+        "Lines starting with # are ignored.".to_string(),
+    ];
+    app.editor = Some(EditorState::new(
+        format!("Reword {hash}"),
+        message,
+        comment_lines,
+        EditorIntent::Reword { hash: hash.to_string() },
     ));
     app.buffer = ActiveBuffer::Editor;
     Ok(())
@@ -971,8 +1021,8 @@ fn handle_editor_key(app: &mut App, key: crossterm::event::KeyEvent) {
 }
 
 fn editor_do_save(app: &mut App) {
-    let (message, is_amend) = match app.editor.as_ref() {
-        Some(state) => (state.message(), state.is_amend),
+    let (message, intent) = match app.editor.as_ref() {
+        Some(state) => (state.message(), state.intent.clone()),
         None => return,
     };
 
@@ -980,27 +1030,27 @@ fn editor_do_save(app: &mut App) {
     app.buffer = ActiveBuffer::Status;
 
     if message.is_empty() {
-        app.status_msg = Some(if is_amend {
-            "Amend aborted: empty message".to_string()
-        } else {
-            "Commit aborted: empty message".to_string()
+        app.status_msg = Some(match intent {
+            EditorIntent::Commit => "Commit aborted: empty message".to_string(),
+            EditorIntent::Amend => "Amend aborted: empty message".to_string(),
+            EditorIntent::Reword { .. } => "Reword aborted: empty message".to_string(),
         });
         return;
     }
 
-    let result = if is_amend {
-        app.backend.amend(&message)
-    } else {
-        app.backend.commit(&message)
+    let result = match &intent {
+        EditorIntent::Commit => app.backend.commit(&message),
+        EditorIntent::Amend => app.backend.amend(&message),
+        EditorIntent::Reword { hash } => app.backend.reword_commit(hash, &message),
     };
 
     match result {
         Ok(_) => {
             let _ = app.refresh();
-            app.status_msg = Some(if is_amend {
-                "Commit amended".to_string()
-            } else {
-                "Commit created".to_string()
+            app.status_msg = Some(match intent {
+                EditorIntent::Commit => "Commit created".to_string(),
+                EditorIntent::Amend => "Commit amended".to_string(),
+                EditorIntent::Reword { hash } => format!("Reworded {hash}"),
             });
         }
         Err(e) => {

@@ -123,6 +123,14 @@ impl Backend for JjBackend {
         bail!("head_commit_message not supported for jj backend")
     }
 
+    fn commit_message(&self, _hash: &str) -> Result<String> {
+        bail!("commit_message not supported for jj backend")
+    }
+
+    fn reword_commit(&self, _hash: &str, _message: &str) -> Result<()> {
+        bail!("reword not supported for jj backend")
+    }
+
     fn push(&self) -> Result<String> {
         let out = self.run_jj(&["git", "push"])?;
         Ok(if out.trim().is_empty() { "Push successful".into() } else { out.trim().to_string() })

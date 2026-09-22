@@ -41,6 +41,7 @@ pub fn render_help(f: &mut Frame, area: Rect) {
         key("  c a         ", "Amend last commit"),
         key("  c F         ", "Instant fixup into a commit"),
         key("  c s         ", "Instant squash into a commit"),
+        key("  c w         ", "Reword a commit's message"),
         Line::from(""),
         section("  Stash"),
         key("  z           ", "Open stash menu"),
@@ -130,6 +131,7 @@ pub fn render_commit_picker(f: &mut Frame, area: Rect, state: &CommitPickerState
     let title = match state.mode {
         FixupMode::Fixup  => " Fixup: select target commit ",
         FixupMode::Squash => " Squash: select target commit ",
+        FixupMode::Reword => " Reword: select target commit ",
     };
 
     let inner_height = popup_area.height.saturating_sub(4) as usize; // border + hint line
@@ -180,7 +182,7 @@ pub fn render_commit_picker(f: &mut Frame, area: Rect, state: &CommitPickerState
 }
 
 pub fn render_commit_popup(f: &mut Frame, area: Rect) {
-    let popup_area = centered_rect(50, 40, area);
+    let popup_area = centered_rect(50, 50, area);
     f.render_widget(Clear, popup_area);
 
     let lines = vec![
@@ -200,6 +202,10 @@ pub fn render_commit_popup(f: &mut Frame, area: Rect) {
         Line::from(vec![
             Span::styled("  s  ", Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
             Span::raw("Instant squash"),
+        ]),
+        Line::from(vec![
+            Span::styled("  w  ", Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::raw("Reword message"),
         ]),
         Line::from(""),
         Line::from(Span::styled(

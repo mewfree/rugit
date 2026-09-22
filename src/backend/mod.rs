@@ -89,6 +89,10 @@ pub trait Backend {
     fn commit(&self, message: &str) -> Result<()>;
     fn amend(&self, message: &str) -> Result<()>;
     fn head_commit_message(&self) -> Result<String>;
+    /// Full message of `hash`, including the body.
+    fn commit_message(&self, hash: &str) -> Result<String>;
+    /// Replace the message of `hash` and replay later commits onto it.
+    fn reword_commit(&self, hash: &str, message: &str) -> Result<()>;
     fn log(&self, limit: usize) -> Result<Vec<CommitInfo>>;
     fn push(&self) -> Result<String>;
     fn push_force_lease(&self) -> Result<String>;

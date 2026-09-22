@@ -63,6 +63,84 @@ impl GitBackend {
         Ok(())
     }
 
+    /// `git commit --fixup=reword:` rejects `-m`, and `--autosquash` only
+    /// matches a subject of `amend! <full hash>`. The editor script writes
+    /// that subject plus the user's message; everything after the first line
+    /// becomes the rewritten message.
+    fn create_reword_commit(&self, full_hash: &str, message: &str) -> Result<()> {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let n = SEQ.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("rugit-reword-{}-{n}", std::process::id()));
+        std::fs::create_dir_all(&dir)?;
+        let outcome = (|| -> Result<()> {
+            let msg_path = dir.join("message");
+            let editor_path = dir.join("editor.sh");
+            std::fs::write(
+                &msg_path,
+                format!("amend! {full_hash}\n\n{}\n", message.trim_end()),
+            )?;
+            std::fs::write(
+                &editor_path,
+                "#!/bin/sh\ncat \"$RUGIT_REWORD_MSG\" > \"$1\"\n",
+            )?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&editor_path, std::fs::Permissions::from_mode(0o755))?;
+            }
+            let out = std::process::Command::new("git")
+                .args(["commit", &format!("--fixup=reword:{full_hash}")])
+                .env("GIT_EDITOR", &editor_path)
+                .env("RUGIT_REWORD_MSG", &msg_path)
+                .current_dir(&self.root)
+                .output()?;
+            if !out.status.success() {
+                let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                anyhow::bail!("{msg}");
+            }
+            Ok(())
+        })();
+        let _ = std::fs::remove_dir_all(&dir);
+        outcome
+    }
+
+    fn ensure_index_clean(&self) -> Result<()> {
+        let out = std::process::Command::new("git")
+            .args(["diff", "--cached", "--quiet"])
+            .current_dir(&self.root)
+            .output()?;
+        if out.status.success() {
+            return Ok(());
+        }
+        if out.status.code() == Some(1) {
+            anyhow::bail!("cannot reword while the index has staged changes");
+        }
+        let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        anyhow::bail!("could not check the index: {msg}");
+    }
+
+    fn resolve_commit(&self, hash: &str) -> Result<String> {
+        let commit = self
+            .repo
+            .revparse_single(hash)
+            .and_then(|obj| obj.peel_to_commit())
+            .with_context(|| format!("could not resolve commit {hash}"))?;
+        Ok(commit.id().to_string())
+    }
+
+    fn reset_soft(&self, oid: &str) -> Result<()> {
+        let out = std::process::Command::new("git")
+            .args(["reset", "--soft", oid])
+            .current_dir(&self.root)
+            .output()?;
+        if !out.status.success() {
+            let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            anyhow::bail!("{msg}");
+        }
+        Ok(())
+    }
+
     /// Cap on unpushed commits we parse. The walk still counts them all.
     const UNPUSHED_DISPLAY_LIMIT: usize = 100;
 
@@ -366,6 +444,40 @@ impl Backend for GitBackend {
         let head = self.repo.head()?;
         let commit = head.peel_to_commit()?;
         Ok(commit.message().unwrap_or("").to_string())
+    }
+
+    fn commit_message(&self, hash: &str) -> Result<String> {
+        let commit = self
+            .repo
+            .revparse_single(hash)
+            .and_then(|obj| obj.peel_to_commit())
+            .with_context(|| format!("could not read commit {hash}"))?;
+        Ok(commit.message().unwrap_or("").to_string())
+    }
+
+    fn reword_commit(&self, hash: &str, message: &str) -> Result<()> {
+        if message.trim().is_empty() {
+            anyhow::bail!("empty commit message");
+        }
+        // --autostash applies with `stash apply`, which does not restore the
+        // index, so a staged change would come back unstaged.
+        self.ensure_index_clean()?;
+        let full = self.resolve_commit(hash)?;
+        let head_before = self
+            .repo
+            .head()
+            .and_then(|h| h.peel_to_commit())
+            .map(|c| c.id().to_string())
+            .context("reword needs an existing HEAD commit")?;
+
+        self.create_reword_commit(&full, message)?;
+        if let Err(e) = self.autosquash_rebase(&full) {
+            if let Err(reset_err) = self.reset_soft(&head_before) {
+                anyhow::bail!("{e} (also failed to drop the amend! commit: {reset_err})");
+            }
+            return Err(e);
+        }
+        Ok(())
     }
 
     fn push(&self) -> Result<String> {
@@ -738,6 +850,210 @@ impl Backend for GitBackend {
             anyhow::bail!("{}", String::from_utf8_lossy(&out.stderr).trim());
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GitBackend;
+    use crate::backend::Backend;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::process::Command;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static N: AtomicU64 = AtomicU64::new(0);
+
+    struct TestRepo {
+        path: PathBuf,
+    }
+
+    impl Drop for TestRepo {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    impl TestRepo {
+        fn new() -> Self {
+            let n = N.fetch_add(1, Ordering::Relaxed);
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!("rugit-reword-test-{nanos}-{n}"));
+            fs::create_dir_all(&path).unwrap();
+            let repo = Self { path };
+            repo.git(&["init", "-q"]);
+            repo.git(&["config", "user.email", "t@t"]);
+            repo.git(&["config", "user.name", "t"]);
+            repo.git(&["config", "commit.gpgsign", "false"]);
+            let hooks = repo.path.join(".git/hooks");
+            fs::create_dir_all(&hooks).unwrap();
+            repo.git(&["config", "core.hooksPath", hooks.to_str().unwrap()]);
+            repo
+        }
+
+        fn git(&self, args: &[&str]) -> std::process::Output {
+            let out = Command::new("git")
+                .args(args)
+                .current_dir(&self.path)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {} failed: {}",
+                args.join(" "),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            out
+        }
+
+        fn commit(&self, path: &str, body: &str, message: &str) {
+            fs::write(self.path.join(path), body).unwrap();
+            self.git(&["add", path]);
+            self.git(&["commit", "-qm", message]);
+        }
+
+        fn backend(&self) -> GitBackend {
+            GitBackend::new(&self.path).unwrap()
+        }
+
+        fn stdout(&self, args: &[&str]) -> String {
+            String::from_utf8(self.git(args).stdout).unwrap()
+        }
+
+        fn log_subjects(&self) -> Vec<String> {
+            self.stdout(&["log", "--format=%s"])
+                .lines()
+                .map(|s| s.to_string())
+                .collect()
+        }
+
+        fn head(&self) -> String {
+            self.stdout(&["rev-parse", "HEAD"]).trim().to_string()
+        }
+    }
+
+    #[test]
+    fn reword_replaces_message_and_replays_later_commits() {
+        let repo = TestRepo::new();
+        repo.commit("a", "a\n", "first subject");
+        fs::write(repo.path.join("b"), "b\n").unwrap();
+        repo.git(&["add", "b"]);
+        repo.git(&[
+            "commit",
+            "-qm",
+            "second subject",
+            "--author=Other <o@example>",
+        ]);
+        repo.commit("c", "c\n", "third");
+        let first = repo.stdout(&["rev-parse", "HEAD~2"]);
+        let target = repo.stdout(&["rev-parse", "--short", "HEAD~1"]);
+
+        repo.backend()
+            .reword_commit(target.trim(), "rewritten subject\n\nrewritten body")
+            .unwrap();
+
+        assert_eq!(
+            repo.log_subjects(),
+            vec!["third", "rewritten subject", "first subject"]
+        );
+        assert_eq!(repo.stdout(&["rev-parse", "HEAD~2"]).trim(), first.trim());
+        assert_eq!(
+            repo.stdout(&["log", "-1", "--format=%B", "HEAD~1"]).trim(),
+            "rewritten subject\n\nrewritten body"
+        );
+        assert_eq!(
+            repo.stdout(&["log", "-1", "--format=%an <%ae>", "HEAD~1"]).trim(),
+            "Other <o@example>"
+        );
+    }
+
+    #[test]
+    fn reword_root_commit() {
+        let repo = TestRepo::new();
+        repo.commit("a", "a\n", "root subject");
+        repo.commit("b", "b\n", "child");
+        let root = repo.stdout(&["rev-parse", "--short", "HEAD~1"]);
+
+        repo.backend()
+            .reword_commit(root.trim(), "renamed root")
+            .unwrap();
+
+        assert_eq!(repo.log_subjects(), vec!["child", "renamed root"]);
+    }
+
+    #[test]
+    fn reword_refuses_staged_changes() {
+        let repo = TestRepo::new();
+        repo.commit("a", "a\n", "first");
+        repo.commit("b", "b\n", "second");
+        fs::write(repo.path.join("a"), "changed\n").unwrap();
+        repo.git(&["add", "a"]);
+        let head = repo.head();
+
+        let err = repo
+            .backend()
+            .reword_commit("HEAD~1", "nope")
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("staged"), "{err}");
+        assert_eq!(repo.head(), head);
+        assert_eq!(repo.log_subjects(), vec!["second", "first"]);
+        assert_eq!(repo.stdout(&["diff", "--cached", "--name-only"]).trim(), "a");
+    }
+
+    #[test]
+    fn reword_keeps_unstaged_work() {
+        let repo = TestRepo::new();
+        repo.commit("a", "a\n", "first");
+        repo.commit("b", "b\n", "second");
+        fs::write(repo.path.join("a"), "dirty\n").unwrap();
+
+        repo.backend()
+            .reword_commit("HEAD", "new subject")
+            .unwrap();
+
+        assert_eq!(repo.log_subjects(), vec!["new subject", "first"]);
+        // Leading space: the edit is unstaged, not staged. trim() would hide that.
+        assert_eq!(repo.stdout(&["status", "--porcelain"]).trim_end(), " M a");
+        assert_eq!(fs::read_to_string(repo.path.join("a")).unwrap(), "dirty\n");
+    }
+
+    #[test]
+    fn failed_rebase_drops_amend_commit() {
+        let repo = TestRepo::new();
+        repo.commit("a", "a\n", "first");
+        repo.commit("b", "b\n", "second");
+        repo.commit("c", "c\n", "third");
+        fs::write(repo.path.join("a"), "dirty\n").unwrap();
+        let hook = repo.path.join(".git/hooks/pre-rebase");
+        fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let head = repo.head();
+
+        let err = repo
+            .backend()
+            .reword_commit("HEAD~1", "nope")
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            err.contains("rebase") || err.contains("hook") || err.contains("refused"),
+            "{err}"
+        );
+        assert_eq!(repo.head(), head);
+        assert_eq!(repo.log_subjects(), vec!["third", "second", "first"]);
+        assert_eq!(fs::read_to_string(repo.path.join("a")).unwrap(), "dirty\n");
+        assert_eq!(repo.stdout(&["status", "--porcelain"]).trim_end(), " M a");
+        assert!(repo.stdout(&["stash", "list"]).trim().is_empty());
     }
 }
 

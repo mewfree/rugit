@@ -238,6 +238,8 @@ mod tests {
             commit(&str) -> Result<()>;
             amend(&str) -> Result<()>;
             head_commit_message() -> Result<String>;
+            commit_message(&str) -> Result<String>;
+            reword_commit(&str, &str) -> Result<()>;
             push() -> Result<String>;
             push_force_lease() -> Result<String>;
             pull() -> Result<String>;

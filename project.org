@@ -17,6 +17,9 @@ Show rebase todo list (pick/reword/edit/squash/fixup/drop per commit). Arrow key
 ** DONE Instant fixup/squash (=c F= / =c s=)
 Magit-style: pick a commit from a list, create a fixup or squash commit targeting it, optionally auto-rebase immediately.
 
+** DONE Instant reword (=c w=)
+Pick a commit, edit its message, and replay later commits onto it. Uses =git commit --fixup=reword:= plus the existing autosquash rebase. Refuses a dirty index, and drops the temporary =amend!= commit if the rebase fails.
+
 ** TODO Diff viewer buffer (=d= on a commit or file)
 Full-screen diff view, navigable by hunk. Invoked from log buffer (=d= on selected commit) or status buffer (=d= on a file). Syntax-highlighted diff lines.
 
