@@ -8,7 +8,7 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
-use tui_textarea::CursorMove;
+use tui_textarea::{CursorMove, TextArea};
 
 mod app;
 mod backend;
@@ -89,7 +89,7 @@ fn draw(terminal: &mut Term, app: &App) -> Result<()> {
     let style = match (&app.buffer, &app.editor) {
         (ActiveBuffer::Editor, Some(editor)) => match editor.mode {
             EditorMode::Insert => SetCursorStyle::SteadyBar,
-            EditorMode::Normal => SetCursorStyle::SteadyBlock,
+            EditorMode::Normal | EditorMode::Visual | EditorMode::VisualLine => SetCursorStyle::SteadyBlock,
         },
         _ => SetCursorStyle::DefaultUserShape,
     };
@@ -623,29 +623,98 @@ fn handle_editor_key(app: &mut App, key: KeyEvent) {
                 KeyCode::Char('d') => {
                     // dd: delete entire line
                     let (row, _) = textarea.cursor();
-                    let line_count = textarea.lines().len();
-                    textarea.move_cursor(CursorMove::Head);
-                    textarea.delete_line_by_end();
-                    if row + 1 < line_count {
-                        textarea.delete_next_char();
-                    } else if row > 0 {
-                        textarea.delete_char();
-                    }
+                    delete_lines(textarea, row, row);
+                    state.yank_linewise = true;
                 }
-                KeyCode::Char('w') => { textarea.delete_next_word(); } // dw
-                KeyCode::Char('$') => { textarea.delete_line_by_end(); } // d$
+                KeyCode::Char('w') => { // dw
+                    textarea.delete_next_word();
+                    state.yank_linewise = false;
+                }
+                KeyCode::Char('$') => { // d$
+                    textarea.delete_line_by_end();
+                    state.yank_linewise = false;
+                }
                 _ => {} // any other key cancels
             }
         }
-        EditorMode::Normal if state.pending_g => {
+        EditorMode::Normal | EditorMode::Visual | EditorMode::VisualLine if state.pending_g => {
             state.pending_g = false;
             if key.code == KeyCode::Char('g') {
                 textarea.move_cursor(CursorMove::Top);
             }
         }
+        EditorMode::Visual => match key.code {
+            KeyCode::Esc | KeyCode::Char('v') => {
+                textarea.cancel_selection();
+                state.mode = EditorMode::Normal;
+            }
+            KeyCode::Char('g') => state.pending_g = true,
+            KeyCode::Char('y') => {
+                let start = select_inclusive(textarea);
+                textarea.copy();
+                state.yank_linewise = false;
+                if let Some((row, col)) = start {
+                    textarea.move_cursor(CursorMove::Jump(row as u16, col as u16));
+                }
+                state.mode = EditorMode::Normal;
+            }
+            KeyCode::Char('d') | KeyCode::Char('x') => {
+                select_inclusive(textarea);
+                textarea.cut();
+                state.yank_linewise = false;
+                state.mode = EditorMode::Normal;
+            }
+            KeyCode::Char('c') => {
+                select_inclusive(textarea);
+                textarea.cut();
+                state.yank_linewise = false;
+                state.mode = EditorMode::Insert;
+            }
+            _ => editor_motion(textarea, key.code),
+        },
+        EditorMode::VisualLine => {
+            let (row, _) = textarea.cursor();
+            let first = state.visual_line_anchor.min(row);
+            let last = state.visual_line_anchor.max(row);
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('V') => state.mode = EditorMode::Normal,
+                KeyCode::Char('g') => state.pending_g = true,
+                KeyCode::Char('y') => {
+                    let text = textarea.lines()[first..=last].join("\n") + "\n";
+                    textarea.set_yank_text(text);
+                    textarea.move_cursor(CursorMove::Jump(first as u16, 0));
+                    state.yank_linewise = true;
+                    state.mode = EditorMode::Normal;
+                }
+                KeyCode::Char('d') | KeyCode::Char('x') => {
+                    delete_lines(textarea, first, last);
+                    state.yank_linewise = true;
+                    state.mode = EditorMode::Normal;
+                }
+                KeyCode::Char('c') => {
+                    // Replace the lines with a single empty line and start typing.
+                    let text = textarea.lines()[first..=last].join("\n") + "\n";
+                    let end_col = textarea.lines()[last].chars().count();
+                    select_range(textarea, (first, 0), (last, end_col));
+                    textarea.cut();
+                    textarea.set_yank_text(text);
+                    state.yank_linewise = true;
+                    state.mode = EditorMode::Insert;
+                }
+                code => editor_motion(textarea, code),
+            }
+        }
         EditorMode::Normal => match key.code {
             // Mode transitions
             KeyCode::Char('i') => state.mode = EditorMode::Insert,
+            KeyCode::Char('v') => {
+                textarea.start_selection();
+                state.mode = EditorMode::Visual;
+            }
+            KeyCode::Char('V') => {
+                state.visual_line_anchor = textarea.cursor().0;
+                state.mode = EditorMode::VisualLine;
+            }
             KeyCode::Char('a') => {
                 state.mode = EditorMode::Insert;
                 textarea.move_cursor(CursorMove::Forward);
@@ -665,17 +734,6 @@ fn handle_editor_key(app: &mut App, key: KeyEvent) {
                 textarea.move_cursor(CursorMove::Up);
                 state.mode = EditorMode::Insert;
             }
-            // Movements
-            KeyCode::Char('h') | KeyCode::Left => textarea.move_cursor(CursorMove::Back),
-            KeyCode::Char('l') | KeyCode::Right => textarea.move_cursor(CursorMove::Forward),
-            KeyCode::Char('j') | KeyCode::Down => textarea.move_cursor(CursorMove::Down),
-            KeyCode::Char('k') | KeyCode::Up => textarea.move_cursor(CursorMove::Up),
-            KeyCode::Char('w') => textarea.move_cursor(CursorMove::WordForward),
-            KeyCode::Char('b') => textarea.move_cursor(CursorMove::WordBack),
-            KeyCode::Char('e') => textarea.move_cursor(CursorMove::WordEnd),
-            KeyCode::Char('0') => textarea.move_cursor(CursorMove::Head),
-            KeyCode::Char('$') => textarea.move_cursor(CursorMove::End),
-            KeyCode::Char('G') => textarea.move_cursor(CursorMove::Bottom),
             KeyCode::Char('g') => state.pending_g = true,
             // Editing
             KeyCode::Char('x') => { textarea.delete_next_char(); }
@@ -686,9 +744,21 @@ fn handle_editor_key(app: &mut App, key: KeyEvent) {
             KeyCode::Enter => save = true,
             KeyCode::Char('q') => abort = true,
             KeyCode::Char(':') => state.pending_colon = true,
-            _ => {}
+            // Paste the yank buffer after (p) or at (P) the cursor
+            KeyCode::Char('p') if state.yank_linewise => paste_lines(textarea, true),
+            KeyCode::Char('P') if state.yank_linewise => paste_lines(textarea, false),
+            KeyCode::Char('p') => {
+                if !cursor_at_line_end(textarea) {
+                    textarea.move_cursor(CursorMove::Forward);
+                }
+                textarea.paste();
+            }
+            KeyCode::Char('P') => { textarea.paste(); }
+            code => editor_motion(textarea, code),
         },
     }
+
+    refresh_line_highlight(state);
 
     if save {
         save_editor(app);
@@ -697,6 +767,108 @@ fn handle_editor_key(app: &mut App, key: KeyEvent) {
         app.buffer = ActiveBuffer::Status;
         app.status_msg = Some("Commit aborted".to_string());
     }
+}
+
+/// Cursor motions shared by the editor's Normal and Visual modes.
+fn editor_motion(textarea: &mut TextArea<'static>, code: KeyCode) {
+    let motion = match code {
+        KeyCode::Char('h') | KeyCode::Left => CursorMove::Back,
+        KeyCode::Char('l') | KeyCode::Right => CursorMove::Forward,
+        KeyCode::Char('j') | KeyCode::Down => CursorMove::Down,
+        KeyCode::Char('k') | KeyCode::Up => CursorMove::Up,
+        KeyCode::Char('w') => CursorMove::WordForward,
+        KeyCode::Char('b') => CursorMove::WordBack,
+        KeyCode::Char('e') => CursorMove::WordEnd,
+        KeyCode::Char('0') => CursorMove::Head,
+        KeyCode::Char('$') => CursorMove::End,
+        KeyCode::Char('G') => CursorMove::Bottom,
+        _ => return,
+    };
+    textarea.move_cursor(motion);
+}
+
+fn cursor_at_line_end(textarea: &TextArea<'static>) -> bool {
+    let (row, col) = textarea.cursor();
+    textarea.lines().get(row).is_none_or(|line| col >= line.chars().count())
+}
+
+/// tui-textarea selections exclude the cell at their end; Vim's visual mode
+/// includes both the anchor and the cursor cell. Re-anchor the selection so it
+/// covers the same span inclusively. Returns the selection start.
+fn select_inclusive(textarea: &mut TextArea<'static>) -> Option<(usize, usize)> {
+    let (start, end) = textarea.selection_range()?;
+    textarea.cancel_selection();
+    textarea.move_cursor(CursorMove::Jump(start.0 as u16, start.1 as u16));
+    textarea.start_selection();
+    textarea.move_cursor(CursorMove::Jump(end.0 as u16, end.1 as u16));
+    if !cursor_at_line_end(textarea) {
+        textarea.move_cursor(CursorMove::Forward);
+    }
+    Some(start)
+}
+
+/// Select the text between two (row, char column) positions.
+fn select_range(textarea: &mut TextArea<'static>, start: (usize, usize), end: (usize, usize)) {
+    textarea.cancel_selection();
+    textarea.move_cursor(CursorMove::Jump(start.0 as u16, start.1 as u16));
+    textarea.start_selection();
+    textarea.move_cursor(CursorMove::Jump(end.0 as u16, end.1 as u16));
+}
+
+/// Delete rows `first..=last` (with their line breaks) into the yank buffer as
+/// linewise text, leaving the cursor at the start of the line that took their place.
+fn delete_lines(textarea: &mut TextArea<'static>, first: usize, last: usize) {
+    let lines = textarea.lines();
+    let text = lines[first..=last].join("\n") + "\n";
+    let width = |row: usize| lines[row].chars().count();
+    let (start, end) = if last + 1 < lines.len() {
+        ((first, 0), (last + 1, 0))
+    } else if first > 0 {
+        // Last line of the buffer: take the preceding line break instead.
+        ((first - 1, width(first - 1)), (last, width(last)))
+    } else {
+        ((0, 0), (last, width(last)))
+    };
+    select_range(textarea, start, end);
+    textarea.cut();
+    textarea.set_yank_text(text);
+    textarea.move_cursor(CursorMove::Jump(first as u16, 0));
+}
+
+/// Paste linewise yank text as whole lines below (`p`) or above (`P`) the cursor line.
+fn paste_lines(textarea: &mut TextArea<'static>, below: bool) {
+    let text = textarea.yank_text();
+    let body = text.strip_suffix('\n').unwrap_or(&text);
+    let (row, _) = textarea.cursor();
+    if below {
+        textarea.move_cursor(CursorMove::End);
+        textarea.insert_newline();
+        textarea.insert_str(body);
+        textarea.move_cursor(CursorMove::Jump((row + 1) as u16, 0));
+    } else {
+        textarea.move_cursor(CursorMove::Head);
+        textarea.insert_str(body);
+        textarea.insert_newline();
+        textarea.move_cursor(CursorMove::Jump(row as u16, 0));
+    }
+}
+
+/// Highlight the rows covered by linewise visual mode (tui-textarea's own
+/// selection is charwise and tied to the cursor, so it can't express this).
+fn refresh_line_highlight(state: &mut EditorState) {
+    state.textarea.clear_custom_highlight();
+    if state.mode != EditorMode::VisualLine {
+        return;
+    }
+    let (row, _) = state.textarea.cursor();
+    let first = state.visual_line_anchor.min(row);
+    let last = state.visual_line_anchor.max(row);
+    let end = state.textarea.lines()[last].len();
+    state.textarea.custom_highlight(
+        ((first, 0), (last, end)),
+        ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::REVERSED),
+        1,
+    );
 }
 
 fn save_editor(app: &mut App) {

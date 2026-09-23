@@ -20,6 +20,7 @@ pub fn render_editor(f: &mut Frame, area: Rect, state: &EditorState) {
     let border_style = match state.mode {
         EditorMode::Insert => Style::new().fg(Color::Green),
         EditorMode::Normal => Style::new().fg(Color::Yellow),
+        EditorMode::Visual | EditorMode::VisualLine => Style::new().fg(Color::Magenta),
     };
 
     let outer_block = Block::default()
@@ -83,6 +84,20 @@ pub fn render_editor(f: &mut Frame, area: Rect, state: &EditorState) {
             " -- INSERT --  (Esc: normal mode)",
             Style::new().fg(Color::Green).add_modifier(Modifier::BOLD),
         )),
+        EditorMode::Visual | EditorMode::VisualLine => Line::from(vec![
+            Span::styled(
+                if state.mode == EditorMode::VisualLine { " -- VISUAL LINE --  " } else { " -- VISUAL --  " },
+                Style::new().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("y", Style::new().fg(Color::Cyan)),
+            Span::raw(": yank  "),
+            Span::styled("d", Style::new().fg(Color::Cyan)),
+            Span::raw(": delete  "),
+            Span::styled("c", Style::new().fg(Color::Cyan)),
+            Span::raw(": change  "),
+            Span::styled("Esc", Style::new().fg(Color::Cyan)),
+            Span::raw(": cancel"),
+        ]),
         EditorMode::Normal => {
             if state.pending_colon {
                 Line::from(Span::styled(

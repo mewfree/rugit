@@ -85,6 +85,10 @@ impl CommitPreview {
 pub enum EditorMode {
     Normal,
     Insert,
+    /// Vim charwise visual mode (`v`): motions extend a selection.
+    Visual,
+    /// Vim linewise visual mode (`V`): selects whole lines from the anchor row.
+    VisualLine,
 }
 
 pub struct EditorState {
@@ -96,6 +100,11 @@ pub struct EditorState {
     pub pending_ctrl_c: bool,
     pub pending_d: bool,
     pub pending_g: bool,
+    /// Row where linewise visual mode (`V`) started.
+    pub visual_line_anchor: usize,
+    /// Whether the yank buffer holds whole lines (`dd`, `V y`), so `p`/`P`
+    /// paste below/above the current line instead of at the cursor.
+    pub yank_linewise: bool,
     pub intent: EditorIntent,
 }
 
@@ -115,6 +124,9 @@ impl EditorState {
         // (neo)vim. Disable tui-textarea's own fake highlighted-cell cursor so
         // the two don't overlap.
         textarea.set_cursor_style(ratatui::style::Style::default());
+        textarea.set_selection_style(
+            ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::REVERSED),
+        );
         // Position cursor at end of first line (matching original behavior)
         textarea.move_cursor(tui_textarea::CursorMove::End);
         Self {
@@ -126,6 +138,8 @@ impl EditorState {
             pending_ctrl_c: false,
             pending_d: false,
             pending_g: false,
+            visual_line_anchor: 0,
+            yank_linewise: false,
             intent,
         }
     }

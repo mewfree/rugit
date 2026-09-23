@@ -33,6 +33,9 @@ Filtering (=/=, live narrows list by hash/author/message, =Esc= clears) is DONE 
 ** TODO Rebase/merge menus (=r=, =m=)
 =r r= rebase onto branch, =r e= rebase --continue, =r a= abort. =m m= merge, =m a= abort.
 
+** DONE Visual selection in commit editor (=v= / =V=)
+=v= (charwise) or =V= (linewise) in Normal mode starts a selection; motions extend it; =y=/=d=/=x=/=c= yank/delete/change (Vim-inclusive), =Esc= or the same key cancels. =p=/=P= paste the yank buffer (linewise yanks, including =dd=, paste as whole lines below/above).
+
 ** TODO Extended vim bindings in commit editor
 =o=/=O= open line below/above, =w=/=b=/=e= word motions, =G=/=gg= jump to end/start, =u=/=C-r= undo/redo, =yy=/=p=/=P= yank and paste line.
 
