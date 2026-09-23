@@ -1,12 +1,31 @@
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use anyhow::{Context, Result};
-use git2::{DiffFormat, DiffOptions, IndexAddOption, Repository, ResetType, Sort, StatusOptions};
+use std::process::{Command, Output, Stdio};
+use anyhow::{bail, Context, Result};
+use git2::{Commit, DiffFormat, DiffOptions, IndexAddOption, Oid, Repository, ResetType, Sort, Status, StatusOptions};
 
-use super::{Backend, CommitInfo, FileEntry, FileKind, RepoStatus};
+use super::{Backend, BranchInfo, CommitInfo, FileEntry, FileKind, RepoStatus, StashInfo};
+use crate::diff;
 
 pub struct GitBackend {
     repo: Repository,
     root: PathBuf,
+}
+
+/// Fails with git's stderr when the command exited non-zero.
+fn check(out: Output) -> Result<Output> {
+    if !out.status.success() {
+        bail!("{}", String::from_utf8_lossy(&out.stderr).trim());
+    }
+    Ok(out)
+}
+
+fn commit_info(commit: &Commit) -> CommitInfo {
+    CommitInfo {
+        short_hash: format!("{:.7}", commit.id()),
+        summary: commit.summary().unwrap_or("").to_string(),
+        author: commit.author().name().unwrap_or("").to_string(),
+    }
 }
 
 impl GitBackend {
@@ -20,6 +39,41 @@ impl GitBackend {
         Ok(Self { repo, root })
     }
 
+    fn command(&self, args: &[&str]) -> Command {
+        let mut cmd = Command::new("git");
+        cmd.args(args).current_dir(&self.root);
+        cmd
+    }
+
+    fn run_git(&self, args: &[&str]) -> Result<Output> {
+        check(self.command(args).output()?)
+    }
+
+    /// Like `run_git`, feeding `input` on stdin.
+    fn pipe_git(&self, args: &[&str], input: &str) -> Result<()> {
+        let mut child = self
+            .command(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        // Dropped at the end of the statement, closing stdin so git can finish.
+        child.stdin.take().context("git stdin unavailable")?.write_all(input.as_bytes())?;
+        check(child.wait_with_output()?)?;
+        Ok(())
+    }
+
+    fn head_commit(&self) -> Option<Commit<'_>> {
+        self.repo.head().ok()?.peel_to_commit().ok()
+    }
+
+    fn find_commit(&self, rev: &str) -> Result<Commit<'_>> {
+        self.repo
+            .revparse_single(rev)
+            .and_then(|obj| obj.peel_to_commit())
+            .with_context(|| format!("could not resolve commit {rev}"))
+    }
+
     /// Non-interactively run `git rebase -i --autosquash` so a just-created
     /// `fixup!`/`squash!` commit is folded into its target. Targets the parent
     /// of `hash` so the rebase range includes the target commit itself.
@@ -27,38 +81,25 @@ impl GitBackend {
         // If the target is the root commit it has no parent, so rebase onto
         // `--root` instead of `<hash>^`.
         let has_parent = self
-            .repo
-            .revparse_single(hash)
-            .and_then(|obj| obj.peel_to_commit())
+            .find_commit(hash)
             .map(|c| c.parent_count() > 0)
             .unwrap_or(true);
         let base = if has_parent {
-            format!("{}^", hash)
+            format!("{hash}^")
         } else {
             "--root".to_string()
         };
-        let out = std::process::Command::new("git")
-            .args([
-                "rebase",
-                "-i",
-                "--autosquash",
-                "--autostash",
-                &base,
-            ])
+        let out = self
+            .command(&["rebase", "-i", "--autosquash", "--autostash", &base])
             // `:` exits 0 without touching the file, so the autosquash-ordered
             // todo list and the squash commit message are accepted as-is.
             .env("GIT_SEQUENCE_EDITOR", ":")
             .env("GIT_EDITOR", ":")
-            .current_dir(&self.root)
             .output()?;
-        if !out.status.success() {
+        if let Err(e) = check(out) {
             // Don't leave the repo mid-rebase (e.g. on a conflict).
-            let _ = std::process::Command::new("git")
-                .args(["rebase", "--abort"])
-                .current_dir(&self.root)
-                .output();
-            let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
-            anyhow::bail!("autosquash rebase failed (conflict?); aborted. {}", msg);
+            let _ = self.run_git(&["rebase", "--abort"]);
+            bail!("autosquash rebase failed (conflict?); aborted. {e}");
         }
         Ok(())
     }
@@ -89,16 +130,12 @@ impl GitBackend {
                 use std::os::unix::fs::PermissionsExt;
                 std::fs::set_permissions(&editor_path, std::fs::Permissions::from_mode(0o755))?;
             }
-            let out = std::process::Command::new("git")
-                .args(["commit", &format!("--fixup=reword:{full_hash}")])
-                .env("GIT_EDITOR", &editor_path)
-                .env("RUGIT_REWORD_MSG", &msg_path)
-                .current_dir(&self.root)
-                .output()?;
-            if !out.status.success() {
-                let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
-                anyhow::bail!("{msg}");
-            }
+            check(
+                self.command(&["commit", &format!("--fixup=reword:{full_hash}")])
+                    .env("GIT_EDITOR", &editor_path)
+                    .env("RUGIT_REWORD_MSG", &msg_path)
+                    .output()?,
+            )?;
             Ok(())
         })();
         let _ = std::fs::remove_dir_all(&dir);
@@ -106,37 +143,10 @@ impl GitBackend {
     }
 
     fn ensure_index_clean(&self) -> Result<()> {
-        let out = std::process::Command::new("git")
-            .args(["diff", "--cached", "--quiet"])
-            .current_dir(&self.root)
-            .output()?;
-        if out.status.success() {
-            return Ok(());
-        }
-        if out.status.code() == Some(1) {
-            anyhow::bail!("cannot reword while the index has staged changes");
-        }
-        let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        anyhow::bail!("could not check the index: {msg}");
-    }
-
-    fn resolve_commit(&self, hash: &str) -> Result<String> {
-        let commit = self
-            .repo
-            .revparse_single(hash)
-            .and_then(|obj| obj.peel_to_commit())
-            .with_context(|| format!("could not resolve commit {hash}"))?;
-        Ok(commit.id().to_string())
-    }
-
-    fn reset_soft(&self, oid: &str) -> Result<()> {
-        let out = std::process::Command::new("git")
-            .args(["reset", "--soft", oid])
-            .current_dir(&self.root)
-            .output()?;
-        if !out.status.success() {
-            let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
-            anyhow::bail!("{msg}");
+        let head_tree = self.repo.head().and_then(|h| h.peel_to_tree()).ok();
+        let staged = self.repo.diff_tree_to_index(head_tree.as_ref(), None, None)?;
+        if staged.deltas().len() > 0 {
+            bail!("cannot reword while the index has staged changes");
         }
         Ok(())
     }
@@ -144,94 +154,56 @@ impl GitBackend {
     /// Cap on unpushed commits we parse. The walk still counts them all.
     const UNPUSHED_DISPLAY_LIMIT: usize = 100;
 
-    fn upstream_info(&self) -> (Option<String>, Vec<super::CommitInfo>, usize) {
-        // Find the upstream for the current branch via git2
-        let head = match self.repo.head() {
-            Ok(h) => h,
-            Err(_) => return (None, vec![], 0),
-        };
-        let branch = match git2::Branch::wrap(head) {
-            b => b,
-        };
-        let upstream_branch = match branch.upstream() {
-            Ok(u) => u,
-            Err(_) => return (None, vec![], 0),
-        };
-        let upstream_name = upstream_branch
-            .name()
+    fn upstream_info(&self) -> (Option<String>, Vec<CommitInfo>, usize) {
+        let Some(upstream) = self
+            .repo
+            .head()
             .ok()
-            .flatten()
-            .map(String::from);
-        let upstream_oid = match upstream_branch.get().peel_to_commit() {
-            Ok(c) => c.id(),
-            Err(_) => return (upstream_name, vec![], 0),
+            .and_then(|head| git2::Branch::wrap(head).upstream().ok())
+        else {
+            return (None, vec![], 0);
         };
+        let name = upstream.name().ok().flatten().map(String::from);
+        let (commits, total) = upstream
+            .get()
+            .peel_to_commit()
+            .ok()
+            .and_then(|c| self.unpushed_since(c.id()).ok())
+            .unwrap_or_default();
+        (name, commits, total)
+    }
 
-        // Collect commits reachable from HEAD but not from upstream
-        let mut walk = match self.repo.revwalk() {
-            Ok(w) => w,
-            Err(_) => return (upstream_name, vec![], 0),
-        };
-        if walk.push_head().is_err() { return (upstream_name, vec![], 0); }
-        if walk.hide(upstream_oid).is_err() { return (upstream_name, vec![], 0); }
-        let _ = walk.set_sorting(git2::Sort::TIME);
+    /// Commits reachable from HEAD but not from `upstream`: the first
+    /// `UNPUSHED_DISPLAY_LIMIT` of them, plus the full count.
+    fn unpushed_since(&self, upstream: Oid) -> Result<(Vec<CommitInfo>, usize)> {
+        let mut walk = self.repo.revwalk()?;
+        walk.push_head()?;
+        walk.hide(upstream)?;
+        walk.set_sorting(Sort::TIME)?;
 
         let mut commits = Vec::new();
-        let mut total = 0usize;
-        for oid_result in walk {
-            let oid = match oid_result { Ok(o) => o, Err(_) => break };
+        let mut total = 0;
+        for oid in walk.map_while(Result::ok) {
             total += 1;
-            if commits.len() >= Self::UNPUSHED_DISPLAY_LIMIT {
-                continue;
+            if commits.len() < Self::UNPUSHED_DISPLAY_LIMIT {
+                let Ok(commit) = self.repo.find_commit(oid) else { break };
+                commits.push(commit_info(&commit));
             }
-            let commit = match self.repo.find_commit(oid) { Ok(c) => c, Err(_) => break };
-            commits.push(super::CommitInfo {
-                short_hash: format!("{:.7}", commit.id()),
-                summary: commit.summary().unwrap_or("").to_string(),
-                author: commit.author().name().unwrap_or("").to_string(),
-            });
         }
-        (upstream_name, commits, total)
+        Ok((commits, total))
     }
 
     fn head_info(&self) -> (Option<String>, Option<String>, Option<String>) {
-        let head = match self.repo.head() {
-            Ok(h) => h,
-            Err(_) => return (None, None, None),
+        let Ok(head) = self.repo.head() else {
+            return (None, None, None);
         };
-
-        let branch = if head.is_branch() {
-            head.shorthand().map(String::from)
-        } else {
-            // detached HEAD
-            head.shorthand().map(|s| format!("({})", s))
-        };
-
-        let commit = head.peel_to_commit().ok();
-        let short_hash = commit.as_ref().map(|c| {
-            let id = c.id();
-            format!("{:.7}", id)
+        let branch = head.shorthand().map(|s| {
+            if head.is_branch() { s.to_string() } else { format!("({s})") } // detached
         });
+        let commit = head.peel_to_commit().ok();
+        let short_hash = commit.as_ref().map(|c| format!("{:.7}", c.id()));
         let summary = commit.as_ref().and_then(|c| c.summary().map(String::from));
-
         (branch, short_hash, summary)
-    }
-
-    fn extract_hunk_patch_str(diff: &str, hunk_index: usize) -> Option<String> {
-        let lines: Vec<&str> = diff.lines().collect();
-        let first_hunk = lines.iter().position(|l| l.starts_with("@@"))?;
-        let header = &lines[..first_hunk];
-        let hunk_starts: Vec<usize> = lines.iter()
-            .enumerate()
-            .filter_map(|(i, l)| if l.starts_with("@@") { Some(i) } else { None })
-            .collect();
-        let start = *hunk_starts.get(hunk_index)?;
-        let end = hunk_starts.get(hunk_index + 1).copied().unwrap_or(lines.len());
-        let mut patch = header.join("\n");
-        patch.push('\n');
-        patch.push_str(&lines[start..end].join("\n"));
-        patch.push('\n');
-        Some(patch)
     }
 }
 
@@ -258,41 +230,39 @@ impl Backend for GitBackend {
         let mut untracked = Vec::new();
 
         for entry in statuses.iter() {
-            let path = entry.path().unwrap_or("").to_string();
+            let path = entry.path().unwrap_or("");
             let s = entry.status();
+            let file = |kind| FileEntry { path: path.to_string(), kind };
+            let renamed = |delta: Option<git2::DiffDelta>| {
+                FileKind::Renamed(
+                    delta
+                        .and_then(|d| d.new_file().path().map(|p| p.to_string_lossy().into_owned()))
+                        .unwrap_or_default(),
+                )
+            };
 
-            // Staged changes
-            if s.contains(git2::Status::INDEX_NEW) {
-                staged.push(FileEntry { path: path.clone(), kind: FileKind::Added });
-            } else if s.contains(git2::Status::INDEX_MODIFIED) {
-                staged.push(FileEntry { path: path.clone(), kind: FileKind::Modified });
-            } else if s.contains(git2::Status::INDEX_DELETED) {
-                staged.push(FileEntry { path: path.clone(), kind: FileKind::Deleted });
-            } else if s.contains(git2::Status::INDEX_RENAMED) {
-                let new_path = entry.head_to_index()
-                    .and_then(|d| d.new_file().path())
-                    .map(|p| p.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                staged.push(FileEntry { path: path.clone(), kind: FileKind::Renamed(new_path) });
+            if s.contains(Status::INDEX_NEW) {
+                staged.push(file(FileKind::Added));
+            } else if s.contains(Status::INDEX_MODIFIED) {
+                staged.push(file(FileKind::Modified));
+            } else if s.contains(Status::INDEX_DELETED) {
+                staged.push(file(FileKind::Deleted));
+            } else if s.contains(Status::INDEX_RENAMED) {
+                staged.push(file(renamed(entry.head_to_index())));
             }
 
-            // Worktree changes
-            if s.contains(git2::Status::WT_MODIFIED) {
-                unstaged.push(FileEntry { path: path.clone(), kind: FileKind::Modified });
-            } else if s.contains(git2::Status::WT_DELETED) {
-                unstaged.push(FileEntry { path: path.clone(), kind: FileKind::Deleted });
-            } else if s.contains(git2::Status::WT_RENAMED) {
-                let new_path = entry.index_to_workdir()
-                    .and_then(|d| d.new_file().path())
-                    .map(|p| p.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                unstaged.push(FileEntry { path: path.clone(), kind: FileKind::Renamed(new_path) });
-            } else if s.contains(git2::Status::WT_NEW) {
-                untracked.push(FileEntry { path: path.clone(), kind: FileKind::Untracked });
+            if s.contains(Status::WT_MODIFIED) {
+                unstaged.push(file(FileKind::Modified));
+            } else if s.contains(Status::WT_DELETED) {
+                unstaged.push(file(FileKind::Deleted));
+            } else if s.contains(Status::WT_RENAMED) {
+                unstaged.push(file(renamed(entry.index_to_workdir())));
+            } else if s.contains(Status::WT_NEW) {
+                untracked.push(file(FileKind::Untracked));
             }
 
-            if s.contains(git2::Status::CONFLICTED) {
-                unstaged.push(FileEntry { path: path.clone(), kind: FileKind::Conflicted });
+            if s.contains(Status::CONFLICTED) {
+                unstaged.push(file(FileKind::Conflicted));
             }
         }
 
@@ -317,23 +287,18 @@ impl Backend for GitBackend {
         diff_opts.pathspec(path);
 
         let diff = if staged {
-            let head_tree = self.repo.head().ok()
-                .and_then(|h| h.peel_to_commit().ok())
-                .and_then(|c| c.tree().ok());
-            let index = self.repo.index()?;
-            self.repo.diff_tree_to_index(head_tree.as_ref(), Some(&index), Some(&mut diff_opts))?
+            let head_tree = self.head_commit().and_then(|c| c.tree().ok());
+            self.repo.diff_tree_to_index(head_tree.as_ref(), None, Some(&mut diff_opts))?
         } else {
             self.repo.diff_index_to_workdir(None, Some(&mut diff_opts))?
         };
 
         let mut output = String::new();
         diff.print(DiffFormat::Patch, |_delta, _hunk, line| {
-            let content = std::str::from_utf8(line.content()).unwrap_or("");
-            match line.origin() {
-                '+' | '-' | ' ' => output.push(line.origin()),
-                _ => {}
+            if let origin @ ('+' | '-' | ' ') = line.origin() {
+                output.push(origin);
             }
-            output.push_str(content);
+            output.push_str(std::str::from_utf8(line.content()).unwrap_or(""));
             true
         })?;
 
@@ -341,15 +306,7 @@ impl Backend for GitBackend {
     }
 
     fn stage_file(&self, path: &str) -> Result<()> {
-        let mut index = self.repo.index()?;
-        let full_path = self.root.join(path);
-        if full_path.exists() {
-            index.add_path(Path::new(path))?;
-        } else {
-            index.remove_path(Path::new(path))?;
-        }
-        index.write()?;
-        Ok(())
+        self.stage_files(&[path.to_string()])
     }
 
     /// One index read/write for all paths, vs one per path in a `stage_file` loop.
@@ -367,13 +324,9 @@ impl Backend for GitBackend {
     }
 
     fn unstage_file(&self, path: &str) -> Result<()> {
-        // If HEAD exists, reset that specific file
-        if let Ok(head) = self.repo.head() {
-            if let Ok(commit) = head.peel_to_commit() {
-                let obj = commit.as_object();
-                self.repo.reset_default(Some(obj), [path].iter())?;
-                return Ok(());
-            }
+        if let Some(head) = self.head_commit() {
+            self.repo.reset_default(Some(head.as_object()), [path])?;
+            return Ok(());
         }
         // No HEAD (initial repo): just remove from index
         let mut index = self.repo.index()?;
@@ -383,31 +336,21 @@ impl Backend for GitBackend {
     }
 
     fn discard_file(&self, path: &str) -> Result<()> {
-        let out = std::process::Command::new("git")
-            .args(["restore", "--", path])
-            .current_dir(&self.root)
-            .output()?;
-        if !out.status.success() {
-            let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
-            anyhow::bail!("{}", msg);
-        }
+        self.run_git(&["restore", "--", path])?;
         Ok(())
     }
 
     fn stage_all(&self) -> Result<()> {
         let mut index = self.repo.index()?;
-        index.add_all(["*"].iter(), IndexAddOption::DEFAULT, None)?;
+        index.add_all(["*"], IndexAddOption::DEFAULT, None)?;
         index.write()?;
         Ok(())
     }
 
     fn unstage_all(&self) -> Result<()> {
-        if let Ok(head) = self.repo.head() {
-            if let Ok(commit) = head.peel_to_commit() {
-                let obj = commit.as_object();
-                self.repo.reset(obj, ResetType::Mixed, None)?;
-                return Ok(());
-            }
+        if let Some(head) = self.head_commit() {
+            self.repo.reset(head.as_object(), ResetType::Mixed, None)?;
+            return Ok(());
         }
         // No HEAD: clear the index
         let mut index = self.repo.index()?;
@@ -417,388 +360,182 @@ impl Backend for GitBackend {
     }
 
     fn commit(&self, message: &str) -> Result<()> {
-        let out = std::process::Command::new("git")
-            .args(["commit", "-m", message])
-            .current_dir(&self.root)
-            .output()?;
-        if !out.status.success() {
-            let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
-            anyhow::bail!("{}", msg);
-        }
+        self.run_git(&["commit", "-m", message])?;
         Ok(())
     }
 
-    fn amend(&self, msg: &str) -> Result<()> {
-        let out = std::process::Command::new("git")
-            .args(["commit", "--amend", "-m", msg])
-            .current_dir(&self.root)
-            .output()?;
-        if !out.status.success() {
-            let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
-            anyhow::bail!("{}", msg);
-        }
+    fn amend(&self, message: &str) -> Result<()> {
+        self.run_git(&["commit", "--amend", "-m", message])?;
         Ok(())
     }
 
     fn head_commit_message(&self) -> Result<String> {
-        let head = self.repo.head()?;
-        let commit = head.peel_to_commit()?;
+        let commit = self.repo.head()?.peel_to_commit()?;
         Ok(commit.message().unwrap_or("").to_string())
     }
 
     fn commit_message(&self, hash: &str) -> Result<String> {
-        let commit = self
-            .repo
-            .revparse_single(hash)
-            .and_then(|obj| obj.peel_to_commit())
-            .with_context(|| format!("could not read commit {hash}"))?;
-        Ok(commit.message().unwrap_or("").to_string())
+        Ok(self.find_commit(hash)?.message().unwrap_or("").to_string())
     }
 
     fn reword_commit(&self, hash: &str, message: &str) -> Result<()> {
         if message.trim().is_empty() {
-            anyhow::bail!("empty commit message");
+            bail!("empty commit message");
         }
         // --autostash applies with `stash apply`, which does not restore the
         // index, so a staged change would come back unstaged.
         self.ensure_index_clean()?;
-        let full = self.resolve_commit(hash)?;
+        let full = self.find_commit(hash)?.id().to_string();
         let head_before = self
-            .repo
-            .head()
-            .and_then(|h| h.peel_to_commit())
-            .map(|c| c.id().to_string())
-            .context("reword needs an existing HEAD commit")?;
+            .head_commit()
+            .context("reword needs an existing HEAD commit")?
+            .id()
+            .to_string();
 
         self.create_reword_commit(&full, message)?;
         if let Err(e) = self.autosquash_rebase(&full) {
-            if let Err(reset_err) = self.reset_soft(&head_before) {
-                anyhow::bail!("{e} (also failed to drop the amend! commit: {reset_err})");
+            if let Err(reset_err) = self.run_git(&["reset", "--soft", &head_before]) {
+                bail!("{e} (also failed to drop the amend! commit: {reset_err})");
             }
             return Err(e);
         }
         Ok(())
     }
 
-    fn push(&self) -> Result<String> {
-        let out = std::process::Command::new("git")
-            .args(["push"])
-            .current_dir(&self.root)
-            .output()?;
-        let combined = format!(
-            "{}{}",
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr),
-        )
-        .trim()
-        .to_string();
-        if out.status.success() {
-            return Ok(if combined.is_empty() { "Push successful".into() } else { combined });
+    fn push(&self) -> Result<()> {
+        let Err(e) = self.run_git(&["push"]) else { return Ok(()) };
+        let msg = e.to_string();
+        if !(msg.contains("no upstream branch") || msg.contains("has no upstream")) {
+            return Err(e);
         }
         // No upstream configured — push with --set-upstream to origin
-        if combined.contains("no upstream branch") || combined.contains("has no upstream") {
-            let branch = self.repo.head().ok()
-                .and_then(|h| h.shorthand().map(|s| s.to_string()))
-                .ok_or_else(|| anyhow::anyhow!("Could not determine current branch"))?;
-            let out2 = std::process::Command::new("git")
-                .args(["push", "--set-upstream", "origin", &branch])
-                .current_dir(&self.root)
-                .output()?;
-            let combined2 = format!(
-                "{}{}",
-                String::from_utf8_lossy(&out2.stdout),
-                String::from_utf8_lossy(&out2.stderr),
-            )
-            .trim()
-            .to_string();
-            if out2.status.success() {
-                return Ok(if combined2.is_empty() { format!("Pushed '{}' to origin", branch) } else { combined2 });
-            }
-            anyhow::bail!("{}", combined2);
-        }
-        anyhow::bail!("{}", combined)
+        let branch = self
+            .repo
+            .head()
+            .ok()
+            .and_then(|h| h.shorthand().map(String::from))
+            .context("Could not determine current branch")?;
+        self.run_git(&["push", "--set-upstream", "origin", &branch])?;
+        Ok(())
     }
 
-    fn push_force_lease(&self) -> Result<String> {
-        let out = std::process::Command::new("git")
-            .args(["push", "--force-with-lease"])
-            .current_dir(&self.root)
-            .output()?;
-        let combined = format!(
-            "{}{}",
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr),
-        )
-        .trim()
-        .to_string();
-        if out.status.success() {
-            Ok(if combined.is_empty() { "Force-push successful".into() } else { combined })
-        } else {
-            anyhow::bail!("{}", combined)
-        }
+    fn push_force_lease(&self) -> Result<()> {
+        self.run_git(&["push", "--force-with-lease"])?;
+        Ok(())
     }
 
-    fn pull(&self) -> Result<String> {
-        let out = std::process::Command::new("git")
-            .args(["pull"])
-            .current_dir(&self.root)
-            .output()?;
-        let combined = format!(
-            "{}{}",
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr),
-        )
-        .trim()
-        .to_string();
-        if out.status.success() {
-            Ok(if combined.is_empty() { "Pull successful".into() } else { combined })
-        } else {
-            anyhow::bail!("{}", combined)
-        }
+    fn pull(&self) -> Result<()> {
+        self.run_git(&["pull"])?;
+        Ok(())
     }
 
     fn log(&self, limit: usize) -> Result<Vec<CommitInfo>> {
         let mut walk = self.repo.revwalk()?;
         walk.push_head().ok(); // ok if no commits yet
         walk.set_sorting(Sort::TIME)?;
-
-        let mut commits = Vec::new();
-        for oid_result in walk.take(limit) {
-            let oid = oid_result?;
-            let commit = self.repo.find_commit(oid)?;
-            let short_hash = format!("{:.7}", commit.id());
-            let summary = commit.summary().unwrap_or("").to_string();
-            let author = commit.author().name().unwrap_or("").to_string();
-            commits.push(CommitInfo {
-                short_hash,
-                summary,
-                author,
-            });
-        }
-        Ok(commits)
+        walk.take(limit)
+            .map(|oid| Ok(commit_info(&self.repo.find_commit(oid?)?)))
+            .collect()
     }
 
     fn apply_patch(&self, patch: &str, reverse: bool) -> Result<()> {
-        use std::io::Write;
-        let mut args = vec!["apply", "--cached"];
-        if reverse { args.push("--reverse"); }
-        let mut child = std::process::Command::new("git")
-            .args(&args)
-            .current_dir(&self.root)
-            .stdin(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()?;
-        if let Some(stdin) = child.stdin.take() {
-            let mut stdin = stdin;
-            stdin.write_all(patch.as_bytes())?;
-        }
-        let out = child.wait_with_output()?;
-        if !out.status.success() {
-            let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
-            anyhow::bail!("{}", msg);
-        }
-        Ok(())
+        let args: &[&str] = if reverse {
+            &["apply", "--cached", "--reverse"]
+        } else {
+            &["apply", "--cached"]
+        };
+        self.pipe_git(args, patch)
     }
 
     fn discard_patch(&self, patch: &str) -> Result<()> {
-        use std::io::Write;
-        let mut child = std::process::Command::new("git")
-            .args(["apply", "--reverse"])
-            .current_dir(&self.root)
-            .stdin(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()?;
-        if let Some(stdin) = child.stdin.take() {
-            let mut stdin = stdin;
-            stdin.write_all(patch.as_bytes())?;
-        }
-        let out = child.wait_with_output()?;
-        if !out.status.success() {
-            let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
-            anyhow::bail!("{}", msg);
-        }
-        Ok(())
+        self.pipe_git(&["apply", "--reverse"], patch)
     }
 
     fn discard_all_unstaged(&self) -> Result<()> {
-        let out = std::process::Command::new("git")
-            .args(["restore", "."])
-            .current_dir(&self.root)
-            .output()?;
-        if !out.status.success() {
-            let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
-            anyhow::bail!("{}", msg);
-        }
+        self.run_git(&["restore", "."])?;
         Ok(())
     }
 
     fn discard_staged_file(&self, path: &str) -> Result<()> {
-        let out = std::process::Command::new("git")
-            .args(["restore", "--staged", "--worktree", "--", path])
-            .current_dir(&self.root)
-            .output()?;
-        if !out.status.success() {
-            let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
-            anyhow::bail!("{}", msg);
-        }
+        self.run_git(&["restore", "--staged", "--worktree", "--", path])?;
         Ok(())
     }
 
     fn discard_all_staged(&self) -> Result<()> {
-        let out = std::process::Command::new("git")
-            .args(["restore", "--staged", "--worktree", "."])
-            .current_dir(&self.root)
-            .output()?;
-        if !out.status.success() {
-            let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
-            anyhow::bail!("{}", msg);
-        }
+        self.run_git(&["restore", "--staged", "--worktree", "."])?;
         Ok(())
     }
 
     fn discard_hunk(&self, path: &str, hunk_index: usize) -> Result<()> {
-        use std::io::Write;
         // Get a fresh diff via subprocess so the patch format exactly matches
         // what `git apply` expects when operating on the working tree.
-        let diff_out = std::process::Command::new("git")
-            .args(["diff", "--", path])
-            .current_dir(&self.root)
-            .output()?;
-        if !diff_out.status.success() {
-            let msg = String::from_utf8_lossy(&diff_out.stderr).trim().to_string();
-            anyhow::bail!("{}", msg);
-        }
-        let diff = String::from_utf8_lossy(&diff_out.stdout);
-        let patch = Self::extract_hunk_patch_str(&diff, hunk_index)
-            .ok_or_else(|| anyhow::anyhow!("hunk {} not found in diff", hunk_index))?;
-
-        let mut child = std::process::Command::new("git")
-            .args(["apply", "--reverse"])
-            .current_dir(&self.root)
-            .stdin(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()?;
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(patch.as_bytes())?;
-        }
-        let out = child.wait_with_output()?;
-        if !out.status.success() {
-            let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
-            anyhow::bail!("{}", msg);
-        }
-        Ok(())
+        let out = self.run_git(&["diff", "--", path])?;
+        let patch = diff::hunk_patch(&String::from_utf8_lossy(&out.stdout), hunk_index)
+            .with_context(|| format!("hunk {hunk_index} not found in diff"))?;
+        self.discard_patch(&patch)
     }
 
     fn fixup_commit(&self, hash: &str) -> Result<()> {
-        let out = std::process::Command::new("git")
-            .args(["commit", &format!("--fixup={}", hash)])
-            .current_dir(&self.root)
-            .output()?;
-        if !out.status.success() {
-            let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
-            anyhow::bail!("{}", msg);
-        }
+        self.run_git(&["commit", &format!("--fixup={hash}")])?;
         self.autosquash_rebase(hash)
     }
 
     fn squash_commit(&self, hash: &str) -> Result<()> {
-        let out = std::process::Command::new("git")
-            .args(["commit", &format!("--squash={}", hash)])
-            .current_dir(&self.root)
-            .output()?;
-        if !out.status.success() {
-            let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
-            anyhow::bail!("{}", msg);
-        }
+        self.run_git(&["commit", &format!("--squash={hash}")])?;
         self.autosquash_rebase(hash)
     }
 
     fn show_commit(&self, hash: &str) -> Result<String> {
-        let out = std::process::Command::new("git")
-            .args(["show", "--stat", "-p", "--color=never", hash])
-            .current_dir(&self.root)
-            .output()?;
-        if out.status.success() {
-            Ok(String::from_utf8_lossy(&out.stdout).into_owned())
-        } else {
-            anyhow::bail!("{}", String::from_utf8_lossy(&out.stderr).trim())
-        }
+        let out = self.run_git(&["show", "--stat", "-p", "--color=never", hash])?;
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     }
 
     fn stash(&self) -> Result<()> {
-        let out = std::process::Command::new("git")
-            .args(["stash", "push"])
-            .current_dir(&self.root)
-            .output()?;
-        if !out.status.success() {
-            anyhow::bail!("{}", String::from_utf8_lossy(&out.stderr).trim());
-        }
+        self.run_git(&["stash", "push"])?;
         Ok(())
     }
 
-    fn stash_pop(&self) -> Result<()> {
-        let out = std::process::Command::new("git")
-            .args(["stash", "pop"])
-            .current_dir(&self.root)
-            .output()?;
-        if !out.status.success() {
-            anyhow::bail!("{}", String::from_utf8_lossy(&out.stderr).trim());
-        }
+    fn stash_pop(&self, index: usize) -> Result<()> {
+        self.run_git(&["stash", "pop", &format!("stash@{{{index}}}")])?;
         Ok(())
     }
 
     fn stash_apply(&self, index: usize) -> Result<()> {
-        let stash_ref = format!("stash@{{{}}}", index);
-        let out = std::process::Command::new("git")
-            .args(["stash", "apply", &stash_ref])
-            .current_dir(&self.root)
-            .output()?;
-        if !out.status.success() {
-            anyhow::bail!("{}", String::from_utf8_lossy(&out.stderr).trim());
-        }
+        self.run_git(&["stash", "apply", &format!("stash@{{{index}}}")])?;
         Ok(())
     }
 
     fn stash_drop(&self, index: usize) -> Result<()> {
-        let stash_ref = format!("stash@{{{}}}", index);
-        let out = std::process::Command::new("git")
-            .args(["stash", "drop", &stash_ref])
-            .current_dir(&self.root)
-            .output()?;
-        if !out.status.success() {
-            anyhow::bail!("{}", String::from_utf8_lossy(&out.stderr).trim());
-        }
+        self.run_git(&["stash", "drop", &format!("stash@{{{index}}}")])?;
         Ok(())
     }
 
     /// Reads `refs/stash`'s reflog; `git stash list` would fork on every refresh.
     /// Summaries omit the `stash@{N}: ` prefix; callers add it.
-    fn stash_list(&self) -> Result<Vec<super::StashInfo>> {
+    fn stash_list(&self) -> Result<Vec<StashInfo>> {
         // No stash ref is the common case, not an error.
-        let reflog = match self.repo.reflog("refs/stash") {
-            Ok(r) => r,
-            Err(_) => return Ok(Vec::new()),
+        let Ok(reflog) = self.repo.reflog("refs/stash") else {
+            return Ok(Vec::new());
         };
         Ok(reflog
             .iter()
             .enumerate()
-            .map(|(i, entry)| super::StashInfo {
-                index: i,
+            .map(|(index, entry)| StashInfo {
+                index,
                 summary: entry.message().unwrap_or("").to_string(),
             })
             .collect())
     }
 
-    fn list_branches(&self) -> Result<Vec<super::BranchInfo>> {
+    fn list_branches(&self) -> Result<Vec<BranchInfo>> {
         let head_name = self.repo.head().ok()
-            .and_then(|h| h.shorthand().map(|s| s.to_string()))
+            .and_then(|h| h.shorthand().map(String::from))
             .unwrap_or_default();
-        let branches = self.repo.branches(Some(git2::BranchType::Local))?;
         let mut result = Vec::new();
-        for branch_result in branches {
-            let (branch, _) = branch_result?;
+        for branch in self.repo.branches(Some(git2::BranchType::Local))? {
+            let (branch, _) = branch?;
             if let Some(name) = branch.name()? {
-                result.push(super::BranchInfo {
+                result.push(BranchInfo {
                     name: name.to_string(),
                     is_current: name == head_name,
                 });
@@ -809,52 +546,28 @@ impl Backend for GitBackend {
     }
 
     fn checkout_branch(&self, name: &str) -> Result<()> {
-        let out = std::process::Command::new("git")
-            .args(["switch", name])
-            .current_dir(&self.root)
-            .output()?;
-        if !out.status.success() {
-            anyhow::bail!("{}", String::from_utf8_lossy(&out.stderr).trim());
-        }
+        self.run_git(&["switch", name])?;
         Ok(())
     }
 
     fn create_branch(&self, name: &str) -> Result<()> {
-        let out = std::process::Command::new("git")
-            .args(["switch", "-c", name])
-            .current_dir(&self.root)
-            .output()?;
-        if !out.status.success() {
-            anyhow::bail!("{}", String::from_utf8_lossy(&out.stderr).trim());
-        }
+        self.run_git(&["switch", "-c", name])?;
         Ok(())
     }
 
     fn delete_branch(&self, name: &str) -> Result<()> {
-        let out = std::process::Command::new("git")
-            .args(["branch", "-d", name])
-            .current_dir(&self.root)
-            .output()?;
-        if !out.status.success() {
-            anyhow::bail!("{}", String::from_utf8_lossy(&out.stderr).trim());
-        }
+        self.run_git(&["branch", "-d", name])?;
         Ok(())
     }
 
     fn rename_branch(&self, old: &str, new: &str) -> Result<()> {
-        let out = std::process::Command::new("git")
-            .args(["branch", "-m", old, new])
-            .current_dir(&self.root)
-            .output()?;
-        if !out.status.success() {
-            anyhow::bail!("{}", String::from_utf8_lossy(&out.stderr).trim());
-        }
+        self.run_git(&["branch", "-m", old, new])?;
         Ok(())
     }
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::GitBackend;
     use crate::backend::Backend;
     use std::fs;
@@ -865,8 +578,8 @@ mod tests {
 
     static N: AtomicU64 = AtomicU64::new(0);
 
-    struct TestRepo {
-        path: PathBuf,
+    pub(crate) struct TestRepo {
+        pub(crate) path: PathBuf,
     }
 
     impl Drop for TestRepo {
@@ -876,7 +589,7 @@ mod tests {
     }
 
     impl TestRepo {
-        fn new() -> Self {
+        pub(crate) fn new() -> Self {
             let n = N.fetch_add(1, Ordering::Relaxed);
             let nanos = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -895,7 +608,7 @@ mod tests {
             repo
         }
 
-        fn git(&self, args: &[&str]) -> std::process::Output {
+        pub(crate) fn git(&self, args: &[&str]) -> std::process::Output {
             let out = Command::new("git")
                 .args(args)
                 .current_dir(&self.path)
@@ -910,17 +623,17 @@ mod tests {
             out
         }
 
-        fn commit(&self, path: &str, body: &str, message: &str) {
+        pub(crate) fn commit(&self, path: &str, body: &str, message: &str) {
             fs::write(self.path.join(path), body).unwrap();
             self.git(&["add", path]);
             self.git(&["commit", "-qm", message]);
         }
 
-        fn backend(&self) -> GitBackend {
+        pub(crate) fn backend(&self) -> GitBackend {
             GitBackend::new(&self.path).unwrap()
         }
 
-        fn stdout(&self, args: &[&str]) -> String {
+        pub(crate) fn stdout(&self, args: &[&str]) -> String {
             String::from_utf8(self.git(args).stdout).unwrap()
         }
 
@@ -1055,5 +768,28 @@ mod tests {
         assert_eq!(repo.stdout(&["status", "--porcelain"]).trim_end(), " M a");
         assert!(repo.stdout(&["stash", "list"]).trim().is_empty());
     }
-}
 
+    #[test]
+    fn stages_and_unstages_a_single_line() {
+        use std::collections::HashSet;
+        let repo = TestRepo::new();
+        repo.commit("f", "a\nb\n", "base");
+        fs::write(repo.path.join("f"), "a\nB\nc\n").unwrap();
+        let backend = repo.backend();
+
+        // Unstaged hunk body: " a", "-b", "+B", "+c". Stage only "+c".
+        let diff = backend.diff_file("f", false).unwrap();
+        let only_c: HashSet<usize> = [3].into();
+        let patch = crate::diff::lines_patch(&diff, 0, &only_c, false).unwrap();
+        backend.apply_patch(&patch, false).unwrap();
+        assert_eq!(repo.stdout(&["show", ":f"]), "a\nb\nc\n");
+
+        // Staged hunk body: " a", " b", "+c". Unstage it again.
+        let staged = backend.diff_file("f", true).unwrap();
+        let added: HashSet<usize> = [2].into();
+        let patch = crate::diff::lines_patch(&staged, 0, &added, true).unwrap();
+        backend.apply_patch(&patch, true).unwrap();
+        assert_eq!(repo.stdout(&["show", ":f"]), "a\nb\n");
+        assert_eq!(fs::read_to_string(repo.path.join("f")).unwrap(), "a\nB\nc\n");
+    }
+}

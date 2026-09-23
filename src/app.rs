@@ -1,11 +1,14 @@
 use std::collections::{HashMap, HashSet};
+use std::ops::{Deref, Range};
+use std::path::Path;
+use std::rc::Rc;
 use anyhow::Result;
 use crossterm::event::KeyCode;
 use tui_textarea::TextArea;
 
-use crate::backend::{Backend, BranchInfo, CommitInfo, FileEntry, FileKind, RepoStatus, StashInfo};
-
+use crate::backend::{Backend, BranchInfo, CommitInfo, FileEntry, RepoStatus, StashInfo};
 use crate::config::Config;
+use crate::diff;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ActiveBuffer {
@@ -66,6 +69,18 @@ pub struct BranchNameInputState {
     pub original: String,
 }
 
+pub struct CommitPreview {
+    pub title: String,
+    pub content: String,
+    pub scroll: u16,
+}
+
+impl CommitPreview {
+    pub fn scroll_by(&mut self, lines: i16) {
+        self.scroll = self.scroll.saturating_add_signed(lines);
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum EditorMode {
     Normal,
@@ -101,10 +116,7 @@ impl EditorState {
         // the two don't overlap.
         textarea.set_cursor_style(ratatui::style::Style::default());
         // Position cursor at end of first line (matching original behavior)
-        textarea.input(crossterm::event::KeyEvent::new(
-            crossterm::event::KeyCode::End,
-            crossterm::event::KeyModifiers::NONE,
-        ));
+        textarea.move_cursor(tui_textarea::CursorMove::End);
         Self {
             textarea,
             mode: EditorMode::Insert,
@@ -124,17 +136,49 @@ impl EditorState {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Section {
     Staged,
     Unstaged,
     Untracked,
 }
 
+impl Section {
+    fn label(self) -> &'static str {
+        match self {
+            Section::Staged => "Staged Changes",
+            Section::Unstaged => "Unstaged Changes",
+            Section::Untracked => "Untracked Files",
+        }
+    }
+}
+
+/// Key for a file's expanded state and cached diff.
+pub type FileKey = (Section, String);
+
+fn file_key(section: Section, path: &str) -> FileKey {
+    (section, path.to_string())
+}
+
+/// One line of a cached diff. Shares the diff text rather than copying it,
+/// since every stage/unstage rebuilds the item list.
+#[derive(Debug, Clone)]
+pub struct DiffText {
+    diff: Rc<str>,
+    range: Range<usize>,
+}
+
+impl Deref for DiffText {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.diff[self.range.clone()]
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum StatusItem {
     Header {
-        label: String,
+        label: &'static str,
         count: usize,
         section: Section,
     },
@@ -144,14 +188,14 @@ pub enum StatusItem {
         is_expanded: bool,
     },
     HunkHeader {
-        line: String,
+        line: DiffText,
         hunk_index: usize,
-        file_path: String,
+        file_path: Rc<str>,
         section: Section,
     },
     DiffLine {
-        line: String,
-        file_path: String,
+        line: DiffText,
+        file_path: Rc<str>,
         section: Section,
         hunk_index: usize,
         line_in_hunk: usize,
@@ -173,6 +217,70 @@ pub enum StatusItem {
     Spacer,
 }
 
+impl StatusItem {
+    /// Unchanged diff lines: the cursor skips them and they can't be staged.
+    fn is_context_line(&self) -> bool {
+        matches!(self, StatusItem::DiffLine { line, .. } if !diff::is_change(line))
+    }
+}
+
+/// Moving a hunk or lines between index and worktree via a patch.
+#[derive(Debug, Clone, Copy)]
+pub enum PatchOp {
+    Stage,
+    Unstage,
+    Discard,
+}
+
+impl PatchOp {
+    /// The section whose cached diff the patch is cut from.
+    fn source(self) -> Section {
+        match self {
+            PatchOp::Stage | PatchOp::Discard => Section::Unstaged,
+            PatchOp::Unstage => Section::Staged,
+        }
+    }
+
+    /// The section that receives the change, expanded afterwards.
+    fn destination(self) -> Section {
+        match self {
+            PatchOp::Stage => Section::Staged,
+            PatchOp::Unstage | PatchOp::Discard => Section::Unstaged,
+        }
+    }
+
+    /// Whether the patch is applied in reverse (see `diff::lines_patch`).
+    fn reverse(self) -> bool {
+        !matches!(self, PatchOp::Stage)
+    }
+
+    fn verb(self) -> &'static str {
+        match self {
+            PatchOp::Stage => "Staged",
+            PatchOp::Unstage => "Unstaged",
+            PatchOp::Discard => "Discarded",
+        }
+    }
+
+    fn apply(self, backend: &dyn Backend, patch: &str) -> Result<()> {
+        match self {
+            PatchOp::Stage | PatchOp::Unstage => backend.apply_patch(patch, self.reverse()),
+            PatchOp::Discard => backend.discard_patch(patch),
+        }
+    }
+}
+
+/// A selected change line: (file, hunk index, index within the hunk body).
+type LineRef = (Rc<str>, usize, usize);
+
+fn remove_path(path: &Path) -> std::io::Result<()> {
+    if path.is_dir() {
+        std::fs::remove_dir_all(path)
+    } else {
+        std::fs::remove_file(path)
+    }
+}
+
 pub struct App {
     pub backend: Box<dyn Backend>,
     pub config: Config,
@@ -180,11 +288,11 @@ pub struct App {
     pub status: RepoStatus,
     pub log: Vec<CommitInfo>,
     pub cursor: usize,
-    pub expanded: HashSet<String>,
-    pub diff_cache: HashMap<String, String>,
+    pub expanded: HashSet<FileKey>,
+    pub diff_cache: HashMap<FileKey, Rc<str>>,
     pub pending_key: Option<KeyCode>,
     pub status_msg: Option<String>,
-    pub commit_preview: Option<(String, String, u16)>, // (title, content, scroll)
+    pub commit_preview: Option<CommitPreview>,
     pub should_quit: bool,
     pub recent_commits: Vec<CommitInfo>,
     /// Flat list of visible status items (rebuilt on refresh)
@@ -242,158 +350,84 @@ impl App {
         Ok(app)
     }
 
+    pub fn open_editor(&mut self, editor: EditorState) {
+        self.editor = Some(editor);
+        self.buffer = ActiveBuffer::Editor;
+    }
+
+    /// Inclusive (start, end) of the visual selection, if active.
+    pub fn visual_range(&self) -> Option<(usize, usize)> {
+        self.visual_anchor
+            .map(|anchor| (anchor.min(self.cursor), anchor.max(self.cursor)))
+    }
+
+    fn section_entries(&self, section: Section) -> &[FileEntry] {
+        match section {
+            Section::Staged => &self.status.staged,
+            Section::Unstaged => &self.status.unstaged,
+            Section::Untracked => &self.status.untracked,
+        }
+    }
+
     /// Rebuild the flat items list from current status + expanded set.
     /// Section order matches Magit: Untracked → Unstaged → Staged.
     pub fn rebuild_items(&mut self) {
         let mut items = vec![StatusItem::Spacer];
-
-        // Untracked section (top)
-        if !self.status.untracked.is_empty() {
-            items.push(StatusItem::Header {
-                label: "Untracked Files".to_string(),
-                count: self.status.untracked.len(),
-                section: Section::Untracked,
-            });
-            for entry in &self.status.untracked {
-                items.push(StatusItem::File {
-                    entry: entry.clone(),
-                    section: Section::Untracked,
-                    is_expanded: false,
-                });
+        // Spacer between sections, but not before the first.
+        let begin_section = |items: &mut Vec<StatusItem>| {
+            if items.len() > 1 {
+                items.push(StatusItem::Spacer);
             }
-        }
+        };
 
-        // Unstaged section (middle)
-        if !self.status.unstaged.is_empty() {
-            if items.len() > 1 { items.push(StatusItem::Spacer); }
-            items.push(StatusItem::Header {
-                label: "Unstaged Changes".to_string(),
-                count: self.status.unstaged.len(),
-                section: Section::Unstaged,
-            });
-            for entry in &self.status.unstaged {
-                let path = entry.path.clone();
-                let key = format!("unstaged:{}", path);
+        for section in [Section::Untracked, Section::Unstaged, Section::Staged] {
+            let entries = self.section_entries(section);
+            if entries.is_empty() {
+                continue;
+            }
+            begin_section(&mut items);
+            items.push(StatusItem::Header { label: section.label(), count: entries.len(), section });
+            for entry in entries {
+                let key = file_key(section, &entry.path);
                 let is_expanded = self.expanded.contains(&key);
-                items.push(StatusItem::File {
-                    entry: entry.clone(),
-                    section: Section::Unstaged,
-                    is_expanded,
-                });
-                if is_expanded {
-                    if let Some(diff) = self.diff_cache.get(&format!("unstaged:{}", path)) {
-                        let mut hunk_index: usize = 0;
-                        let mut seen_first_hunk = false;
-                        let mut line_in_hunk: usize = 0;
-                        for line in diff.lines() {
-                            if line.starts_with("@@") {
-                                if seen_first_hunk { hunk_index += 1; }
-                                seen_first_hunk = true;
-                                line_in_hunk = 0;
-                                items.push(StatusItem::HunkHeader {
-                                    line: line.to_string(),
-                                    hunk_index,
-                                    file_path: path.clone(),
-                                    section: Section::Unstaged,
-                                });
-                            } else if seen_first_hunk {
-                                items.push(StatusItem::DiffLine {
-                                    line: line.to_string(),
-                                    file_path: path.clone(),
-                                    section: Section::Unstaged,
-                                    hunk_index,
-                                    line_in_hunk,
-                                });
-                                line_in_hunk += 1;
-                            }
-                        }
-                    }
+                items.push(StatusItem::File { entry: entry.clone(), section, is_expanded });
+                if let Some(diff) = self.diff_cache.get(&key).filter(|_| is_expanded) {
+                    push_diff_items(&mut items, diff, entry.path.as_str().into(), section);
                 }
             }
         }
 
-        // Staged section (bottom)
-        if !self.status.staged.is_empty() {
-            if items.len() > 1 { items.push(StatusItem::Spacer); }
-            items.push(StatusItem::Header {
-                label: "Staged Changes".to_string(),
-                count: self.status.staged.len(),
-                section: Section::Staged,
-            });
-            for entry in &self.status.staged {
-                let path = entry.path.clone();
-                let key = format!("staged:{}", path);
-                let is_expanded = self.expanded.contains(&key);
-                items.push(StatusItem::File {
-                    entry: entry.clone(),
-                    section: Section::Staged,
-                    is_expanded,
-                });
-                if is_expanded {
-                    if let Some(diff) = self.diff_cache.get(&format!("staged:{}", path)) {
-                        let mut hunk_index: usize = 0;
-                        let mut seen_first_hunk = false;
-                        let mut line_in_hunk: usize = 0;
-                        for line in diff.lines() {
-                            if line.starts_with("@@") {
-                                if seen_first_hunk { hunk_index += 1; }
-                                seen_first_hunk = true;
-                                line_in_hunk = 0;
-                                items.push(StatusItem::HunkHeader {
-                                    line: line.to_string(),
-                                    hunk_index,
-                                    file_path: path.clone(),
-                                    section: Section::Staged,
-                                });
-                            } else if seen_first_hunk {
-                                items.push(StatusItem::DiffLine {
-                                    line: line.to_string(),
-                                    file_path: path.clone(),
-                                    section: Section::Staged,
-                                    hunk_index,
-                                    line_in_hunk,
-                                });
-                                line_in_hunk += 1;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Stash section
         if !self.stashes.is_empty() {
-            if items.len() > 1 { items.push(StatusItem::Spacer); }
+            begin_section(&mut items);
             items.push(StatusItem::StashHeader { count: self.stashes.len() });
-            for info in &self.stashes {
-                items.push(StatusItem::StashEntry { info: info.clone() });
-            }
+            items.extend(self.stashes.iter().map(|info| StatusItem::StashEntry { info: info.clone() }));
         }
 
-        // Unpushed commits section
         if !self.status.unpushed.is_empty() {
-            if items.len() > 1 { items.push(StatusItem::Spacer); }
-            let upstream = self.status.upstream.clone().unwrap_or_else(|| "upstream".to_string());
+            begin_section(&mut items);
             items.push(StatusItem::UnpushedHeader {
                 // `unpushed` is capped; show the real total.
                 count: self.status.unpushed_total.max(self.status.unpushed.len()),
-                upstream,
+                upstream: self.status.upstream.clone().unwrap_or_else(|| "upstream".to_string()),
             });
-            for info in &self.status.unpushed {
-                items.push(StatusItem::RecentCommit { info: info.clone() });
-            }
+            items.extend(self.status.unpushed.iter().map(|info| StatusItem::RecentCommit { info: info.clone() }));
         }
 
-        // Recent commits section
         if !self.recent_commits.is_empty() {
-            if items.len() > 1 { items.push(StatusItem::Spacer); }
+            begin_section(&mut items);
             items.push(StatusItem::RecentHeader);
-            for info in &self.recent_commits {
-                items.push(StatusItem::RecentCommit { info: info.clone() });
-            }
+            items.extend(self.recent_commits.iter().map(|info| StatusItem::RecentCommit { info: info.clone() }));
         }
 
         self.items = items;
+    }
+
+    /// Keep the cursor on an item, and off a Spacer.
+    fn clamp_cursor(&mut self) {
+        self.cursor = self.cursor.min(self.items.len().saturating_sub(1));
+        while self.cursor > 0 && matches!(self.items[self.cursor], StatusItem::Spacer) {
+            self.cursor -= 1;
+        }
     }
 
     pub fn refresh(&mut self) -> Result<()> {
@@ -401,581 +435,292 @@ impl App {
         self.recent_commits = self.backend.log(self.config.recent_limit).unwrap_or_default();
         self.stashes = self.backend.stash_list().unwrap_or_default();
         self.rebuild_items();
-        // Clamp cursor
-        if !self.items.is_empty() && self.cursor >= self.items.len() {
-            self.cursor = self.items.len() - 1;
-        }
+        self.clamp_cursor();
         Ok(())
     }
 
+    /// Nearest item at or before `i` that isn't a context line; item 0 always counts.
+    fn selectable_at_or_before(&self, i: usize) -> usize {
+        (1..=i)
+            .rev()
+            .find(|&j| !self.items[j].is_context_line())
+            .unwrap_or(0)
+    }
+
     pub fn move_down(&mut self) {
-        if self.buffer == ActiveBuffer::Status {
-            let mut next = self.cursor + 1;
-            while next < self.items.len() {
-                match &self.items[next] {
-                    StatusItem::DiffLine { line, .. }
-                        if !line.starts_with('+') && !line.starts_with('-') => { next += 1; }
-                    _ => break,
+        match self.buffer {
+            ActiveBuffer::Status => {
+                if let Some(next) = (self.cursor + 1..self.items.len()).find(|&i| !self.items[i].is_context_line()) {
+                    self.cursor = next;
                 }
             }
-            if next < self.items.len() {
-                self.cursor = next;
+            ActiveBuffer::Log => {
+                if self.cursor + 1 < self.log_visible_len() {
+                    self.cursor += 1;
+                }
             }
-        } else if self.buffer == ActiveBuffer::Log {
-            let len = self.log_visible_len();
-            if len > 0 && self.cursor + 1 < len {
-                self.cursor += 1;
-            }
+            _ => {}
         }
     }
 
     pub fn move_up(&mut self) {
-        if self.buffer == ActiveBuffer::Status {
-            if self.cursor == 0 { return; }
-            let mut prev = self.cursor - 1;
-            while prev > 0 {
-                match &self.items[prev] {
-                    StatusItem::DiffLine { line, .. }
-                        if !line.starts_with('+') && !line.starts_with('-') => { prev -= 1; }
-                    _ => break,
-                }
+        match self.buffer {
+            ActiveBuffer::Status if self.cursor > 0 => {
+                self.cursor = self.selectable_at_or_before(self.cursor - 1);
             }
-            self.cursor = prev;
-        } else {
-            if self.cursor > 0 { self.cursor -= 1; }
+            ActiveBuffer::Log => self.cursor = self.cursor.saturating_sub(1),
+            _ => {}
         }
     }
 
     pub fn move_page_down(&mut self, amount: usize) {
-        if self.buffer == ActiveBuffer::Status {
-            if self.items.is_empty() { return; }
-            let target = (self.cursor + amount).min(self.items.len() - 1);
-            let mut next = target;
-            while next < self.items.len() {
-                match &self.items[next] {
-                    StatusItem::DiffLine { line, .. }
-                        if !line.starts_with('+') && !line.starts_with('-') => { next += 1; }
-                    _ => break,
+        match self.buffer {
+            ActiveBuffer::Status if !self.items.is_empty() => {
+                let target = (self.cursor + amount).min(self.items.len() - 1);
+                let selectable = |&i: &usize| !self.items[i].is_context_line();
+                // Past a run of context lines at the end, fall back to the last
+                // selectable item between the cursor and the target.
+                self.cursor = (target..self.items.len())
+                    .find(selectable)
+                    .or_else(|| (self.cursor + 1..=target).rev().find(selectable))
+                    .unwrap_or(self.cursor);
+            }
+            ActiveBuffer::Log => {
+                let len = self.log_visible_len();
+                if len > 0 {
+                    self.cursor = (self.cursor + amount).min(len - 1);
                 }
             }
-            if next >= self.items.len() {
-                next = target;
-                while next > self.cursor {
-                    match &self.items[next] {
-                        StatusItem::DiffLine { line, .. }
-                            if !line.starts_with('+') && !line.starts_with('-') => { next -= 1; }
-                        _ => break,
-                    }
-                }
-            }
-            self.cursor = next;
-        } else if self.buffer == ActiveBuffer::Log {
-            let len = self.log_visible_len();
-            if len > 0 {
-                self.cursor = (self.cursor + amount).min(len - 1);
-            }
+            _ => {}
         }
     }
 
     pub fn move_page_up(&mut self, amount: usize) {
-        if self.buffer == ActiveBuffer::Status {
-            if self.items.is_empty() { return; }
-            let target = self.cursor.saturating_sub(amount);
-            let mut prev = target;
-            while prev > 0 {
-                match &self.items[prev] {
-                    StatusItem::DiffLine { line, .. }
-                        if !line.starts_with('+') && !line.starts_with('-') => { prev -= 1; }
-                    _ => break,
-                }
+        match self.buffer {
+            ActiveBuffer::Status if !self.items.is_empty() => {
+                self.cursor = self.selectable_at_or_before(self.cursor.saturating_sub(amount));
             }
-            self.cursor = prev;
-        } else if self.buffer == ActiveBuffer::Log {
-            self.cursor = self.cursor.saturating_sub(amount);
+            ActiveBuffer::Log => self.cursor = self.cursor.saturating_sub(amount),
+            _ => {}
         }
     }
 
-    /// Refresh status and diffs for `file_path` after a stage/unstage operation.
+    /// Refresh status and diffs for `paths` after a stage/unstage operation.
     /// `destination` is the section that just received the change — it is always
     /// expanded and re-fetched so the user can see the result immediately.
     /// The other section is re-fetched only if it was already expanded.
-    fn refresh_file_diffs(&mut self, file_path: &str, destination: &Section) -> Result<()> {
-        let staged_key   = format!("staged:{}", file_path);
-        let unstaged_key = format!("unstaged:{}", file_path);
-        self.diff_cache.remove(&staged_key);
-        self.diff_cache.remove(&unstaged_key);
+    fn refresh_file_diffs(&mut self, paths: &[&str], destination: Section) -> Result<()> {
+        for path in paths {
+            self.diff_cache.remove(&file_key(Section::Staged, path));
+            self.diff_cache.remove(&file_key(Section::Unstaged, path));
+        }
 
         // Only the index/worktree moved; no need to re-walk the commit list.
         self.status = self.backend.status()?;
 
-        let want_staged   = *destination == Section::Staged
-            || self.expanded.contains(&staged_key);
-        let want_unstaged = *destination == Section::Unstaged
-            || self.expanded.contains(&unstaged_key);
-
-        if self.status.staged.iter().any(|e| e.path == file_path) {
-            if want_staged {
-                self.expanded.insert(staged_key.clone());
-                if let Ok(diff) = self.backend.diff_file(file_path, true) {
-                    self.diff_cache.insert(staged_key, diff);
-                }
+        for path in paths {
+            for section in [Section::Staged, Section::Unstaged] {
+                self.refetch_diff(section, path, destination);
             }
-        } else {
-            self.expanded.remove(&staged_key);
-        }
-
-        if self.status.unstaged.iter().any(|e| e.path == file_path) {
-            if want_unstaged {
-                self.expanded.insert(unstaged_key.clone());
-                if let Ok(diff) = self.backend.diff_file(file_path, false) {
-                    self.diff_cache.insert(unstaged_key, diff);
-                }
-            }
-        } else {
-            self.expanded.remove(&unstaged_key);
         }
 
         self.rebuild_items();
-        // Clamp then snap cursor off Spacers
-        if !self.items.is_empty() {
-            if self.cursor >= self.items.len() {
-                self.cursor = self.items.len() - 1;
+        self.clamp_cursor();
+        Ok(())
+    }
+
+    fn refetch_diff(&mut self, section: Section, path: &str, destination: Section) {
+        let key = file_key(section, path);
+        if !self.section_entries(section).iter().any(|e| e.path == path) {
+            self.expanded.remove(&key);
+            return;
+        }
+        if section == destination || self.expanded.contains(&key) {
+            if let Ok(diff) = self.backend.diff_file(path, section == Section::Staged) {
+                self.diff_cache.insert(key.clone(), diff.into());
             }
-            while self.cursor > 0 && matches!(self.items[self.cursor], StatusItem::Spacer) {
-                self.cursor -= 1;
-            }
+            self.expanded.insert(key);
+        }
+    }
+
+    /// Apply `op` to one hunk, cut from the cached diff of its source section.
+    fn apply_hunk(&mut self, op: PatchOp, file_path: &str, hunk_index: usize) -> Result<()> {
+        let Some(diff) = self.diff_cache.get(&file_key(op.source(), file_path)).cloned() else {
+            return Ok(());
+        };
+        if let Some(patch) = diff::hunk_patch(&diff, hunk_index) {
+            op.apply(self.backend.as_ref(), &patch)?;
+            self.refresh_file_diffs(&[file_path], op.destination())?;
+            self.status_msg = Some(format!("{} hunk {}", op.verb(), hunk_index + 1));
         }
         Ok(())
     }
 
-    /// Parse `@@ -old_start[,count] +new_start[,count] @@` and return (old_start, new_start).
-    fn parse_hunk_starts(header: &str) -> Option<(u32, u32)> {
-        let inner = header.strip_prefix("@@ ")?;
-        let (old_part, rest) = inner.split_once(' ')?;
-        let (new_part, _) = rest.split_once(' ')?;
-        let old_start: u32 = old_part.trim_start_matches('-').split(',').next()?.parse().ok()?;
-        let new_start: u32 = new_part.trim_start_matches('+').split(',').next()?.parse().ok()?;
-        Some((old_start, new_start))
-    }
+    /// Apply `op` to the given change lines, one patch per (file, hunk).
+    /// Returns how many lines were applied.
+    fn apply_lines(&mut self, op: PatchOp, lines: &[LineRef]) -> Result<usize> {
+        let mut groups: HashMap<(Rc<str>, usize), HashSet<usize>> = HashMap::new();
+        for (file, hunk, line) in lines {
+            groups.entry((file.clone(), *hunk)).or_default().insert(*line);
+        }
 
-    /// Build a minimal patch for one or more `+`/`-` lines within a hunk.
-    ///
-    /// `reverse=false` (staging): the INDEX contains `-` lines (they haven't been removed yet)
-    /// and does NOT contain `+` lines. So `-` lines become context, `+` lines are dropped.
-    ///
-    /// `reverse=true` (unstaging): the INDEX contains `+` lines (they were staged) and does NOT
-    /// contain `-` lines (they were staged for removal). So `+` lines become context, `-` dropped.
-    fn extract_lines_patch(diff: &str, hunk_index: usize, line_indices: &HashSet<usize>, reverse: bool) -> Option<String> {
-        let lines: Vec<&str> = diff.lines().collect();
-        let first_hunk = lines.iter().position(|l| l.starts_with("@@"))?;
-        let file_header = lines[..first_hunk].join("\n");
-
-        let hunk_starts: Vec<usize> = lines.iter()
-            .enumerate()
-            .filter_map(|(i, l)| if l.starts_with("@@") { Some(i) } else { None })
-            .collect();
-
-        let hunk_start = *hunk_starts.get(hunk_index)?;
-        let hunk_end = hunk_starts.get(hunk_index + 1).copied().unwrap_or(lines.len());
-        let hunk_body = &lines[hunk_start + 1..hunk_end];
-
-        let (old_start, new_start) = Self::parse_hunk_starts(lines[hunk_start])?;
-
-        let mut new_body: Vec<String> = Vec::new();
-        let mut has_selected = false;
-        for (i, &body_line) in hunk_body.iter().enumerate() {
-            let ch = body_line.chars().next().unwrap_or(' ');
-            if line_indices.contains(&i) && (ch == '+' || ch == '-') {
-                new_body.push(body_line.to_string());
-                has_selected = true;
-            } else if ch == '+' {
-                if reverse {
-                    new_body.push(format!(" {}", &body_line[1..]));
-                }
-            } else if ch == '-' {
-                if !reverse {
-                    new_body.push(format!(" {}", &body_line[1..]));
-                }
-            } else {
-                new_body.push(body_line.to_string());
+        let mut applied = 0;
+        for ((file_path, hunk_index), line_indices) in &groups {
+            let Some(diff) = self.diff_cache.get(&file_key(op.source(), file_path)).cloned() else {
+                continue;
+            };
+            if let Some(patch) = diff::lines_patch(&diff, *hunk_index, line_indices, op.reverse()) {
+                op.apply(self.backend.as_ref(), &patch)?;
+                applied += line_indices.len();
             }
         }
 
-        if !has_selected {
-            return None;
+        let mut files: Vec<&str> = groups.keys().map(|(file, _)| &**file).collect();
+        files.sort_unstable();
+        files.dedup();
+        if !files.is_empty() {
+            self.refresh_file_diffs(&files, op.destination())?;
+        }
+        Ok(applied)
+    }
+
+    /// Apply `op` to the hunk or change line under the cursor. Other items,
+    /// and items not in `op`'s source section, are ignored.
+    fn apply_at_cursor(&mut self, op: PatchOp, item: StatusItem) -> Result<()> {
+        match item {
+            StatusItem::HunkHeader { hunk_index, file_path, section, .. } if section == op.source() => {
+                self.apply_hunk(op, &file_path, hunk_index)
+            }
+            StatusItem::DiffLine { line, file_path, section, hunk_index, line_in_hunk }
+                if section == op.source() && diff::is_change(&line) =>
+            {
+                if self.apply_lines(op, &[(file_path, hunk_index, line_in_hunk)])? > 0 {
+                    self.status_msg = Some(format!("{} line", op.verb()));
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Apply `op` to every change line in the visual selection, then leave visual mode.
+    pub fn apply_visual_selection(&mut self, op: PatchOp) -> Result<()> {
+        let Some((start, end)) = self.visual_range() else { return Ok(()) };
+        self.visual_anchor = None;
+
+        let lines: Vec<LineRef> = self.items
+            .iter()
+            .take(end + 1)
+            .skip(start)
+            .filter_map(|item| match item {
+                StatusItem::DiffLine { line, file_path, section, hunk_index, line_in_hunk }
+                    if *section == op.source() && diff::is_change(line) =>
+                {
+                    Some((file_path.clone(), *hunk_index, *line_in_hunk))
+                }
+                _ => None,
+            })
+            .collect();
+        if lines.is_empty() {
+            return Ok(());
         }
 
-        let old_count = new_body.iter()
-            .filter(|l| matches!(l.chars().next(), Some(' ') | Some('-')))
-            .count() as u32;
-        let new_count = new_body.iter()
-            .filter(|l| matches!(l.chars().next(), Some(' ') | Some('+')))
-            .count() as u32;
-
-        let mut patch = file_header;
-        patch.push('\n');
-        patch.push_str(&format!("@@ -{},{} +{},{} @@\n", old_start, old_count, new_start, new_count));
-        patch.push_str(&new_body.join("\n"));
-        patch.push('\n');
-        Some(patch)
-    }
-
-    fn extract_line_patch(diff: &str, hunk_index: usize, line_in_hunk: usize, reverse: bool) -> Option<String> {
-        let mut set = HashSet::new();
-        set.insert(line_in_hunk);
-        Self::extract_lines_patch(diff, hunk_index, &set, reverse)
-    }
-
-    /// Extract a single hunk from a diff string as a complete patch (file header + hunk body).
-    fn extract_hunk_patch(diff: &str, hunk_index: usize) -> Option<String> {
-        let lines: Vec<&str> = diff.lines().collect();
-
-        // Collect file header lines (everything before the first @@)
-        let first_hunk_start = lines.iter().position(|l| l.starts_with("@@"))?;
-        let header: Vec<&str> = lines[..first_hunk_start].to_vec();
-
-        // Find the start of each hunk
-        let hunk_starts: Vec<usize> = lines.iter()
-            .enumerate()
-            .filter_map(|(i, l)| if l.starts_with("@@") { Some(i) } else { None })
-            .collect();
-
-        let start = *hunk_starts.get(hunk_index)?;
-        let end = hunk_starts.get(hunk_index + 1).copied().unwrap_or(lines.len());
-
-        let mut patch = header.join("\n");
-        patch.push('\n');
-        patch.push_str(&lines[start..end].join("\n"));
-        patch.push('\n');
-        Some(patch)
+        let applied = self.apply_lines(op, &lines)?;
+        self.status_msg = Some(format!("{} {applied} line(s)", op.verb()));
+        Ok(())
     }
 
     pub fn stage_at_cursor(&mut self) -> Result<()> {
-        if let Some(item) = self.items.get(self.cursor).cloned() {
-            match item {
-                StatusItem::File { entry, section, .. } => {
-                    match section {
-                        Section::Unstaged | Section::Untracked => {
-                            self.backend.stage_file(&entry.path)?;
-                            self.refresh_file_diffs(&entry.path, &Section::Staged)?;
-                            self.status_msg = Some(format!("Staged: {}", entry.path));
-                        }
-                        Section::Staged => {
-                            self.status_msg = Some(format!("{} is already staged", entry.path));
-                        }
-                    }
-                }
-                StatusItem::Header { section, .. } => {
-                    match section {
-                        Section::Unstaged => {
-                            let paths: Vec<String> = self.status.unstaged.iter().map(|e| e.path.clone()).collect();
-                            self.backend.stage_files(&paths)?;
-                            self.diff_cache.clear();
-                            self.refresh()?;
-                            self.status_msg = Some("Staged all unstaged changes".to_string());
-                        }
-                        Section::Untracked => {
-                            let paths: Vec<String> = self.status.untracked.iter().map(|e| e.path.clone()).collect();
-                            self.backend.stage_files(&paths)?;
-                            self.diff_cache.clear();
-                            self.refresh()?;
-                            self.status_msg = Some("Staged all untracked files".to_string());
-                        }
-                        Section::Staged => {}
-                    }
-                }
-                StatusItem::HunkHeader { hunk_index, file_path, section, .. } => {
-                    if section == Section::Unstaged {
-                        let key = self.file_key(&section, &file_path);
-                        if let Some(diff) = self.diff_cache.get(&key).cloned() {
-                            if let Some(patch) = Self::extract_hunk_patch(&diff, hunk_index) {
-                                self.backend.apply_patch(&patch, false)?;
-                                self.refresh_file_diffs(&file_path, &Section::Staged)?;
-                                self.status_msg = Some(format!("Staged hunk {}", hunk_index + 1));
-                            }
-                        }
-                    }
-                }
-                StatusItem::DiffLine { line, file_path, section, hunk_index, line_in_hunk } => {
-                    if !line.starts_with('+') && !line.starts_with('-') {
-                        return Ok(());
-                    }
-                    if section == Section::Unstaged {
-                        let key = self.file_key(&section, &file_path);
-                        if let Some(diff) = self.diff_cache.get(&key).cloned() {
-                            if let Some(patch) = Self::extract_line_patch(&diff, hunk_index, line_in_hunk, false) {
-                                self.backend.apply_patch(&patch, false)?;
-                                self.refresh_file_diffs(&file_path, &Section::Staged)?;
-                                self.status_msg = Some("Staged line".to_string());
-                            }
-                        }
-                    }
-                }
-                _ => {}
+        let Some(item) = self.items.get(self.cursor).cloned() else { return Ok(()) };
+        match item {
+            StatusItem::File { entry, section: Section::Staged, .. } => {
+                self.status_msg = Some(format!("{} is already staged", entry.path));
             }
+            StatusItem::File { entry, .. } => {
+                self.backend.stage_file(&entry.path)?;
+                self.refresh_file_diffs(&[&entry.path], Section::Staged)?;
+                self.status_msg = Some(format!("Staged: {}", entry.path));
+            }
+            StatusItem::Header { section: section @ (Section::Unstaged | Section::Untracked), .. } => {
+                let paths: Vec<String> = self.section_entries(section).iter().map(|e| e.path.clone()).collect();
+                self.backend.stage_files(&paths)?;
+                self.diff_cache.clear();
+                self.refresh()?;
+                self.status_msg = Some(match section {
+                    Section::Untracked => "Staged all untracked files",
+                    _ => "Staged all unstaged changes",
+                }.to_string());
+            }
+            item => self.apply_at_cursor(PatchOp::Stage, item)?,
         }
         Ok(())
     }
 
     pub fn unstage_at_cursor(&mut self) -> Result<()> {
-        if let Some(item) = self.items.get(self.cursor).cloned() {
-            match item {
-                StatusItem::File { entry, section, .. } => {
-                    if section == Section::Staged {
-                        self.backend.unstage_file(&entry.path)?;
-                        self.refresh_file_diffs(&entry.path, &Section::Unstaged)?;
-                        self.status_msg = Some(format!("Unstaged: {}", entry.path));
-                    }
-                }
-                StatusItem::Header { section, .. } => {
-                    if section == Section::Staged {
-                        self.backend.unstage_all()?;
-                        self.diff_cache.clear();
-                        self.refresh()?;
-                        self.status_msg = Some("Unstaged all changes".to_string());
-                    }
-                }
-                StatusItem::HunkHeader { hunk_index, file_path, section, .. } => {
-                    if section == Section::Staged {
-                        let key = self.file_key(&section, &file_path);
-                        if let Some(diff) = self.diff_cache.get(&key).cloned() {
-                            if let Some(patch) = Self::extract_hunk_patch(&diff, hunk_index) {
-                                self.backend.apply_patch(&patch, true)?;
-                                self.refresh_file_diffs(&file_path, &Section::Unstaged)?;
-                                self.status_msg = Some(format!("Unstaged hunk {}", hunk_index + 1));
-                            }
-                        }
-                    }
-                }
-                StatusItem::DiffLine { line, file_path, section, hunk_index, line_in_hunk } => {
-                    if !line.starts_with('+') && !line.starts_with('-') {
-                        return Ok(());
-                    }
-                    if section == Section::Staged {
-                        let key = self.file_key(&section, &file_path);
-                        if let Some(diff) = self.diff_cache.get(&key).cloned() {
-                            if let Some(patch) = Self::extract_line_patch(&diff, hunk_index, line_in_hunk, true) {
-                                self.backend.apply_patch(&patch, true)?;
-                                self.refresh_file_diffs(&file_path, &Section::Unstaged)?;
-                                self.status_msg = Some("Unstaged line".to_string());
-                            }
-                        }
-                    }
-                }
-                _ => {}
+        let Some(item) = self.items.get(self.cursor).cloned() else { return Ok(()) };
+        match item {
+            StatusItem::File { entry, section: Section::Staged, .. } => {
+                self.backend.unstage_file(&entry.path)?;
+                self.refresh_file_diffs(&[&entry.path], Section::Unstaged)?;
+                self.status_msg = Some(format!("Unstaged: {}", entry.path));
             }
-        }
-        Ok(())
-    }
-
-    /// Stage all `+`/`-` DiffLines in the visual selection range.
-    pub fn stage_visual_selection(&mut self) -> Result<()> {
-        let anchor = match self.visual_anchor.take() {
-            Some(a) => a,
-            None => return Ok(()),
-        };
-        let (start, end) = if anchor <= self.cursor { (anchor, self.cursor) } else { (self.cursor, anchor) };
-
-        // Collect selected unstaged diff lines grouped by (file_path, hunk_index)
-        let mut groups: HashMap<(String, usize), HashSet<usize>> = HashMap::new();
-        let mut any_file: Option<String> = None;
-
-        for i in start..=end {
-            if let Some(StatusItem::DiffLine { line, file_path, section, hunk_index, line_in_hunk }) = self.items.get(i) {
-                if *section == Section::Unstaged && (line.starts_with('+') || line.starts_with('-')) {
-                    groups.entry((file_path.clone(), *hunk_index)).or_default().insert(*line_in_hunk);
-                    any_file = Some(file_path.clone());
-                }
+            StatusItem::Header { section: Section::Staged, .. } => {
+                self.backend.unstage_all()?;
+                self.diff_cache.clear();
+                self.refresh()?;
+                self.status_msg = Some("Unstaged all changes".to_string());
             }
+            item => self.apply_at_cursor(PatchOp::Unstage, item)?,
         }
-
-        if groups.is_empty() {
-            return Ok(());
-        }
-
-        // Apply patches per (file, hunk) in order, reusing cached diff
-        let mut total = 0usize;
-        for ((file_path, hunk_index), line_indices) in &groups {
-            let cache_key = format!("unstaged:{}", file_path);
-            if let Some(diff) = self.diff_cache.get(&cache_key).cloned() {
-                if let Some(patch) = Self::extract_lines_patch(&diff, *hunk_index, line_indices, false) {
-                    self.backend.apply_patch(&patch, false)?;
-                    total += line_indices.len();
-                }
-            }
-        }
-
-        if let Some(path) = any_file {
-            self.refresh_file_diffs(&path, &Section::Staged)?;
-        }
-        self.status_msg = Some(format!("Staged {} line(s)", total));
-        Ok(())
-    }
-
-    /// Unstage all `+`/`-` DiffLines in the visual selection range.
-    pub fn unstage_visual_selection(&mut self) -> Result<()> {
-        let anchor = match self.visual_anchor.take() {
-            Some(a) => a,
-            None => return Ok(()),
-        };
-        let (start, end) = if anchor <= self.cursor { (anchor, self.cursor) } else { (self.cursor, anchor) };
-
-        let mut groups: HashMap<(String, usize), HashSet<usize>> = HashMap::new();
-        let mut any_file: Option<String> = None;
-
-        for i in start..=end {
-            if let Some(StatusItem::DiffLine { line, file_path, section, hunk_index, line_in_hunk }) = self.items.get(i) {
-                if *section == Section::Staged && (line.starts_with('+') || line.starts_with('-')) {
-                    groups.entry((file_path.clone(), *hunk_index)).or_default().insert(*line_in_hunk);
-                    any_file = Some(file_path.clone());
-                }
-            }
-        }
-
-        if groups.is_empty() {
-            return Ok(());
-        }
-
-        let mut total = 0usize;
-        for ((file_path, hunk_index), line_indices) in &groups {
-            let cache_key = format!("staged:{}", file_path);
-            if let Some(diff) = self.diff_cache.get(&cache_key).cloned() {
-                if let Some(patch) = Self::extract_lines_patch(&diff, *hunk_index, line_indices, true) {
-                    self.backend.apply_patch(&patch, true)?;
-                    total += line_indices.len();
-                }
-            }
-        }
-
-        if let Some(path) = any_file {
-            self.refresh_file_diffs(&path, &Section::Unstaged)?;
-        }
-        self.status_msg = Some(format!("Unstaged {} line(s)", total));
-        Ok(())
-    }
-
-    /// Discard all `+`/`-` DiffLines in the visual selection range (unstaged only).
-    pub fn discard_visual_selection(&mut self) -> Result<()> {
-        let anchor = match self.visual_anchor.take() {
-            Some(a) => a,
-            None => return Ok(()),
-        };
-        let (start, end) = if anchor <= self.cursor { (anchor, self.cursor) } else { (self.cursor, anchor) };
-
-        let mut groups: HashMap<(String, usize), HashSet<usize>> = HashMap::new();
-        let mut any_file: Option<String> = None;
-
-        for i in start..=end {
-            if let Some(StatusItem::DiffLine { line, file_path, section, hunk_index, line_in_hunk }) = self.items.get(i) {
-                if *section == Section::Unstaged && (line.starts_with('+') || line.starts_with('-')) {
-                    groups.entry((file_path.clone(), *hunk_index)).or_default().insert(*line_in_hunk);
-                    any_file = Some(file_path.clone());
-                }
-            }
-        }
-
-        if groups.is_empty() {
-            return Ok(());
-        }
-
-        let mut total = 0usize;
-        for ((file_path, hunk_index), line_indices) in &groups {
-            let cache_key = format!("unstaged:{}", file_path);
-            if let Some(diff) = self.diff_cache.get(&cache_key).cloned() {
-                if let Some(patch) = Self::extract_lines_patch(&diff, *hunk_index, line_indices, true) {
-                    self.backend.discard_patch(&patch)?;
-                    total += line_indices.len();
-                }
-            }
-        }
-
-        if let Some(path) = any_file {
-            self.refresh_file_diffs(&path, &Section::Unstaged)?;
-        }
-        self.status_msg = Some(format!("Discarded {} line(s)", total));
         Ok(())
     }
 
     pub fn discard_at_cursor(&mut self) -> Result<()> {
-        if let Some(item) = self.items.get(self.cursor).cloned() {
-            match item {
-                StatusItem::File { entry, section, .. } => {
-                    match section {
-                        Section::Unstaged => {
-                            self.backend.discard_file(&entry.path)?;
-                            self.diff_cache.remove(&self.file_key(&section, &entry.path));
-                            self.refresh()?;
-                            self.status_msg = Some(format!("Discarded: {}", entry.path));
-                        }
-                        Section::Untracked => {
-                            let full_path = self.backend.repo_root().join(&entry.path);
-                            if entry.kind == FileKind::Untracked && full_path.is_dir() {
-                                std::fs::remove_dir_all(&full_path)?;
-                            } else {
-                                std::fs::remove_file(&full_path)?;
-                            }
-                            self.refresh()?;
-                            self.status_msg = Some(format!("Deleted: {}", entry.path));
-                        }
-                        Section::Staged => {
-                            self.backend.discard_staged_file(&entry.path)?;
-                            self.diff_cache.remove(&self.file_key(&section, &entry.path));
-                            self.refresh()?;
-                            self.status_msg = Some(format!("Discarded: {}", entry.path));
-                        }
-                    }
-                }
-                StatusItem::Header { section, .. } => {
-                    match section {
-                        Section::Unstaged => {
-                            self.backend.discard_all_unstaged()?;
-                            self.diff_cache.clear();
-                            self.refresh()?;
-                            self.status_msg = Some("Discarded all unstaged changes".to_string());
-                        }
-                        Section::Untracked => {
-                            let root = self.backend.repo_root().to_path_buf();
-                            for entry in self.status.untracked.clone() {
-                                let full_path = root.join(&entry.path);
-                                if full_path.is_dir() {
-                                    std::fs::remove_dir_all(&full_path)?;
-                                } else {
-                                    std::fs::remove_file(&full_path)?;
-                                }
-                            }
-                            self.refresh()?;
-                            self.status_msg = Some("Deleted all untracked files".to_string());
-                        }
-                        Section::Staged => {
-                            self.backend.discard_all_staged()?;
-                            self.diff_cache.clear();
-                            self.refresh()?;
-                            self.status_msg = Some("Discarded all staged changes".to_string());
-                        }
-                    }
-                }
-                StatusItem::HunkHeader { hunk_index, file_path, section, .. } => {
-                    if section == Section::Unstaged {
-                        let key = self.file_key(&section, &file_path);
-                        self.backend.discard_hunk(&file_path, hunk_index)?;
-                        // Re-fetch the diff so remaining hunks stay visible.
-                        self.status = self.backend.status()?;
-                        if self.status.unstaged.iter().any(|e| e.path == file_path) {
-                            if let Ok(new_diff) = self.backend.diff_file(&file_path, false) {
-                                self.diff_cache.insert(key, new_diff);
-                            }
-                        } else {
-                            self.diff_cache.remove(&key);
-                        }
-                        self.rebuild_items();
-                        if !self.items.is_empty() && self.cursor >= self.items.len() {
-                            self.cursor = self.items.len() - 1;
-                        }
-                        self.status_msg = Some(format!("Discarded hunk {}", hunk_index + 1));
-                    }
-                }
-                _ => {}
+        let Some(item) = self.items.get(self.cursor).cloned() else { return Ok(()) };
+        match item {
+            StatusItem::File { entry, section: Section::Untracked, .. } => {
+                remove_path(&self.backend.repo_root().join(&entry.path))?;
+                self.refresh()?;
+                self.status_msg = Some(format!("Deleted: {}", entry.path));
             }
+            StatusItem::File { entry, section, .. } => {
+                if section == Section::Staged {
+                    self.backend.discard_staged_file(&entry.path)?;
+                } else {
+                    self.backend.discard_file(&entry.path)?;
+                }
+                self.diff_cache.remove(&file_key(section, &entry.path));
+                self.refresh()?;
+                self.status_msg = Some(format!("Discarded: {}", entry.path));
+            }
+            StatusItem::Header { section: Section::Untracked, .. } => {
+                let root = self.backend.repo_root();
+                for entry in &self.status.untracked {
+                    remove_path(&root.join(&entry.path))?;
+                }
+                self.refresh()?;
+                self.status_msg = Some("Deleted all untracked files".to_string());
+            }
+            StatusItem::Header { section, .. } => {
+                if section == Section::Staged {
+                    self.backend.discard_all_staged()?;
+                } else {
+                    self.backend.discard_all_unstaged()?;
+                }
+                self.diff_cache.clear();
+                self.refresh()?;
+                self.status_msg = Some(format!(
+                    "Discarded all {} changes",
+                    if section == Section::Staged { "staged" } else { "unstaged" }
+                ));
+            }
+            StatusItem::HunkHeader { hunk_index, file_path, section: Section::Unstaged, .. } => {
+                self.backend.discard_hunk(&file_path, hunk_index)?;
+                // Re-fetch the diff so remaining hunks stay visible.
+                self.refresh_file_diffs(&[&file_path], Section::Unstaged)?;
+                self.status_msg = Some(format!("Discarded hunk {}", hunk_index + 1));
+            }
+            _ => {}
         }
         Ok(())
     }
@@ -994,43 +739,27 @@ impl App {
         Ok(())
     }
 
-    pub fn toggle_expand_at_cursor(&mut self) -> Result<()> {
-        let item = match self.items.get(self.cursor).cloned() {
-            Some(i) => i,
-            None => return Ok(()),
-        };
-
-        match item {
-            StatusItem::File { entry, section, .. } => {
-                let key = self.file_key(&section, &entry.path);
-                let staged = section == Section::Staged;
-                if self.expanded.contains(&key) {
-                    self.expanded.remove(&key);
-                } else {
-                    if !self.diff_cache.contains_key(&key) {
-                        match self.backend.diff_file(&entry.path, staged) {
-                            Ok(diff) => { self.diff_cache.insert(key.clone(), diff); }
-                            Err(e) => {
-                                self.status_msg = Some(format!("Diff error: {}", e));
-                                return Ok(());
-                            }
-                        }
+    /// Show or hide the diff of the file under the cursor. Untracked files
+    /// have no diff against the index, so they don't expand.
+    pub fn toggle_expand_at_cursor(&mut self) {
+        let Some(StatusItem::File { entry, section, .. }) = self.items.get(self.cursor) else { return };
+        if *section == Section::Untracked {
+            return;
+        }
+        let key = file_key(*section, &entry.path);
+        if !self.expanded.remove(&key) {
+            if !self.diff_cache.contains_key(&key) {
+                match self.backend.diff_file(&key.1, key.0 == Section::Staged) {
+                    Ok(diff) => { self.diff_cache.insert(key.clone(), diff.into()); }
+                    Err(e) => {
+                        self.status_msg = Some(format!("Diff error: {e}"));
+                        return;
                     }
-                    self.expanded.insert(key);
                 }
-                self.rebuild_items();
             }
-            _ => {}
+            self.expanded.insert(key);
         }
-        Ok(())
-    }
-
-    fn file_key(&self, section: &Section, path: &str) -> String {
-        match section {
-            Section::Staged => format!("staged:{}", path),
-            Section::Unstaged => format!("unstaged:{}", path),
-            Section::Untracked => format!("untracked:{}", path),
-        }
+        self.rebuild_items();
     }
 
     pub fn load_log(&mut self) -> Result<()> {
@@ -1039,10 +768,12 @@ impl App {
         Ok(())
     }
 
-    /// Set or clear the log filter, recomputing the match list.
+    /// Set or clear the log filter, recomputing the match list and moving
+    /// the cursor back to the top.
     pub fn set_log_filter(&mut self, filter: Option<String>) {
         self.log_filter = filter;
         self.rebuild_log_filter();
+        self.cursor = 0;
     }
 
     /// Match on hash/author/summary, case-insensitive.
@@ -1073,5 +804,106 @@ impl App {
     /// The commits currently visible in the log buffer, in display order.
     pub fn log_visible(&self) -> impl Iterator<Item = &CommitInfo> + '_ {
         self.log_filtered.iter().filter_map(move |&i| self.log.get(i))
+    }
+}
+
+/// Push a hunk header or diff line item for each line of `diff`. Lines
+/// before the first hunk (the file header) are skipped.
+fn push_diff_items(items: &mut Vec<StatusItem>, diff: &Rc<str>, file_path: Rc<str>, section: Section) {
+    let mut hunk_index: Option<usize> = None;
+    let mut line_in_hunk = 0;
+    let mut start = 0;
+    for raw in diff.split_inclusive('\n') {
+        // Same line ending handling as `str::lines`.
+        let text = raw.strip_suffix('\n').map_or(raw, |l| l.strip_suffix('\r').unwrap_or(l));
+        let end = start + text.len();
+        let line = DiffText { diff: diff.clone(), range: start..end };
+        start += raw.len();
+
+        if line.starts_with("@@") {
+            let index = hunk_index.map_or(0, |i| i + 1);
+            hunk_index = Some(index);
+            line_in_hunk = 0;
+            items.push(StatusItem::HunkHeader { line, hunk_index: index, file_path: file_path.clone(), section });
+        } else if let Some(hunk_index) = hunk_index {
+            items.push(StatusItem::DiffLine { line, file_path: file_path.clone(), section, hunk_index, line_in_hunk });
+            line_in_hunk += 1;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{App, PatchOp, Section, StatusItem};
+    use crate::backend::git::tests::TestRepo;
+    use crate::config::Config;
+    use std::fs;
+
+    /// A repo where `f` changed on lines 1 and 3 (one hunk), with the diff
+    /// expanded and the cursor on its file line.
+    fn app_with_expanded_diff() -> (TestRepo, App) {
+        let repo = TestRepo::new();
+        repo.commit("f", "a\nb\nc\n", "base");
+        fs::write(repo.path.join("f"), "A\nb\nC\n").unwrap();
+        let mut app = App::new(Box::new(repo.backend()), Config::default()).unwrap();
+        app.cursor = find(&app, |item| matches!(item, StatusItem::File { section: Section::Unstaged, .. }));
+        app.toggle_expand_at_cursor();
+        (repo, app)
+    }
+
+    fn find(app: &App, pred: impl Fn(&StatusItem) -> bool) -> usize {
+        app.items.iter().position(pred).expect("item not found")
+    }
+
+    fn diff_line(app: &App, text: &str) -> usize {
+        find(app, |item| matches!(item, StatusItem::DiffLine { line, .. } if &**line == text))
+    }
+
+    #[test]
+    fn cursor_skips_context_lines() {
+        let (_repo, mut app) = app_with_expanded_diff();
+        app.cursor = diff_line(&app, "+A");
+        app.move_down();
+        assert_eq!(app.cursor, diff_line(&app, "-c"), "should skip \" b\"");
+        app.move_up();
+        assert_eq!(app.cursor, diff_line(&app, "+A"));
+    }
+
+    #[test]
+    fn visual_selection_stages_only_selected_lines() {
+        let (repo, mut app) = app_with_expanded_diff();
+        app.visual_anchor = Some(diff_line(&app, "-a"));
+        app.cursor = diff_line(&app, "+A");
+
+        app.apply_visual_selection(PatchOp::Stage).unwrap();
+
+        assert_eq!(repo.stdout(&["show", ":f"]), "A\nb\nc\n");
+        assert_eq!(app.status_msg.as_deref(), Some("Staged 2 line(s)"));
+        assert!(app.visual_anchor.is_none());
+        // The staged side is expanded to show the result.
+        assert!(app.expanded.contains(&(Section::Staged, "f".to_string())));
+    }
+
+    #[test]
+    fn stage_then_unstage_single_line_at_cursor() {
+        let (repo, mut app) = app_with_expanded_diff();
+        app.cursor = diff_line(&app, "+C");
+        app.stage_at_cursor().unwrap();
+        assert_eq!(repo.stdout(&["show", ":f"]), "a\nb\nc\nC\n");
+
+        app.cursor = find(&app, |item| {
+            matches!(item, StatusItem::DiffLine { line, section: Section::Staged, .. } if &**line == "+C")
+        });
+        app.unstage_at_cursor().unwrap();
+        assert_eq!(repo.stdout(&["show", ":f"]), "a\nb\nc\n");
+    }
+
+    #[test]
+    fn discarding_a_hunk_restores_the_file() {
+        let (repo, mut app) = app_with_expanded_diff();
+        app.cursor = find(&app, |item| matches!(item, StatusItem::HunkHeader { .. }));
+        app.discard_at_cursor().unwrap();
+        assert_eq!(fs::read_to_string(repo.path.join("f")).unwrap(), "a\nb\nc\n");
+        assert!(app.status.unstaged.is_empty());
     }
 }

@@ -14,14 +14,11 @@ use ratatui::{
 use crate::app::{ActiveBuffer, App};
 use crossterm::event::KeyCode;
 
-pub fn render(f: &mut Frame, app: &mut App) {
+/// Background of the header, footer and editor status bars.
+pub const BAR_BG: Color = Color::Rgb(20, 30, 70);
+
+pub fn render(f: &mut Frame, app: &App) {
     let area = f.area();
-
-    // Build header line text
-    let head_text = build_head_line(app);
-
-    // Build footer text
-    let footer_text = build_footer(app);
 
     // Layout: header(1) | main(min) | footer(1)
     let chunks = Layout::vertical([
@@ -31,10 +28,8 @@ pub fn render(f: &mut Frame, app: &mut App) {
     ])
     .split(area);
 
-    // Header
-    let header = Paragraph::new(head_text)
-        .style(Style::new().bg(Color::Rgb(20, 30, 70)).fg(Color::White));
-    f.render_widget(header, chunks[0]);
+    let bar = Style::new().bg(BAR_BG).fg(Color::White);
+    f.render_widget(Paragraph::new(build_head_line(app)).style(bar), chunks[0]);
 
     // Main content
     match app.buffer {
@@ -58,100 +53,61 @@ pub fn render(f: &mut Frame, app: &mut App) {
         }
     }
 
-    // Commit preview popup
-    if let Some((title, content, scroll)) = &app.commit_preview.clone() {
-        popup::render_commit_preview(f, area, title, content, *scroll);
+    if let Some(preview) = &app.commit_preview {
+        popup::render_commit_preview(f, area, preview);
     }
 
-    // Commit submenu popup
-    if app.pending_key == Some(KeyCode::Char('c')) && app.commit_picker.is_none() {
-        popup::render_commit_popup(f, area);
+    // Submenu for the first key of a chord
+    match app.pending_key {
+        Some(KeyCode::Char('c')) => popup::render_commit_popup(f, area),
+        Some(KeyCode::Char('p')) => popup::render_push_popup(f, area),
+        Some(KeyCode::Char('z')) => popup::render_stash_popup(f, area),
+        Some(KeyCode::Char('b')) => popup::render_branch_popup(f, area),
+        _ => {}
     }
 
-    // Fixup/squash commit picker popup
-    if let Some(ref state) = app.commit_picker {
+    if let Some(state) = &app.commit_picker {
         popup::render_commit_picker(f, area, state);
     }
-
-    // Push submenu popup
-    if app.pending_key == Some(KeyCode::Char('p')) {
-        popup::render_push_popup(f, area);
-    }
-
-    // Stash submenu popup
-    if app.pending_key == Some(KeyCode::Char('z')) {
-        popup::render_stash_popup(f, area);
-    }
-
-    // Stash list popup
-    if let Some(ref state) = app.stash_list {
+    if let Some(state) = &app.stash_list {
         popup::render_stash_list(f, area, state);
     }
-
-    // Branch submenu popup
-    if app.pending_key == Some(KeyCode::Char('b')) && app.branch_picker.is_none() && app.branch_name_input.is_none() {
-        popup::render_branch_popup(f, area);
-    }
-
-    // Branch picker popup (checkout / delete)
-    if let Some(ref state) = app.branch_picker {
+    if let Some(state) = &app.branch_picker {
         popup::render_branch_picker(f, area, state);
     }
-
-    // Branch name input popup (create / rename)
-    if let Some(ref state) = app.branch_name_input {
+    if let Some(state) = &app.branch_name_input {
         popup::render_branch_name_input(f, area, state);
     }
-
-    // Log search input popup
-    if let Some(ref input) = app.log_search {
+    if let Some(input) = &app.log_search {
         popup::render_log_search(f, area, input);
     }
 
-    // Footer
-    let footer = Paragraph::new(footer_text)
-        .style(Style::new().bg(Color::Rgb(20, 30, 70)).fg(Color::White));
-    f.render_widget(footer, chunks[2]);
+    f.render_widget(Paragraph::new(build_footer(app)).style(bar), chunks[2]);
 }
 
 fn build_head_line(app: &App) -> Line<'static> {
-    let backend = app.backend.kind_name();
-    match (&app.status.head, &app.status.head_short_hash, &app.status.head_summary) {
-        (Some(branch), Some(hash), Some(summary)) => {
-            Line::from(vec![
-                Span::styled(
-                    format!(" {} ", backend),
-                    Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-                ),
+    let mut spans = vec![
+        Span::styled(
+            format!(" {} ", app.backend.kind_name()),
+            Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        ),
+    ];
+    let status = &app.status;
+    match (&status.head, &status.head_short_hash, &status.head_summary) {
+        (Some(branch), hash, summary) => {
+            let (head, summary) = match (hash, summary) {
+                (Some(hash), Some(summary)) => (format!("head: {branch} · {hash} "), summary.clone()),
+                _ => (format!("head: {branch} "), String::new()),
+            };
+            spans.extend([
                 Span::raw("│ "),
-                Span::styled(
-                    format!("head: {} · {} ", branch, hash),
-                    Style::new().fg(Color::LightCyan).add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(summary.clone()),
-            ])
+                Span::styled(head, Style::new().fg(Color::LightCyan).add_modifier(Modifier::BOLD)),
+                Span::raw(summary),
+            ]);
         }
-        (Some(branch), _, _) => {
-            Line::from(vec![
-                Span::styled(
-                    format!(" {} ", backend),
-                    Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-                ),
-                Span::raw("│ "),
-                Span::styled(
-                    format!("head: {} ", branch),
-                    Style::new().fg(Color::LightCyan).add_modifier(Modifier::BOLD),
-                ),
-            ])
-        }
-        _ => Line::from(vec![
-            Span::styled(
-                format!(" {} ", backend),
-                Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-            ),
-            Span::raw("│ (no commits yet)"),
-        ]),
+        _ => spans.push(Span::raw("│ (no commits yet)")),
     }
+    Line::from(spans)
 }
 
 fn build_footer(app: &App) -> Line<'static> {

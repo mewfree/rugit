@@ -113,6 +113,6 @@ pub fn render_editor(f: &mut Frame, area: Rect, state: &EditorState) {
     };
 
     let status_paragraph = Paragraph::new(status_text)
-        .style(Style::new().bg(Color::Rgb(20, 30, 70)));
+        .style(Style::new().bg(super::BAR_BG));
     f.render_widget(status_paragraph, chunks[1]);
 }

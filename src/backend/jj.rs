@@ -9,17 +9,10 @@ pub struct JjBackend {
 
 impl JjBackend {
     pub fn new(path: &Path) -> Result<Self> {
-        // Find the .jj root
-        let mut cur = path.to_path_buf();
-        loop {
-            if cur.join(".jj").is_dir() {
-                return Ok(Self { root: cur });
-            }
-            if !cur.pop() {
-                break;
-            }
+        match super::find_jj_root(path) {
+            Some(root) => Ok(Self { root: root.to_path_buf() }),
+            None => bail!("No .jj directory found from {}", path.display()),
         }
-        bail!("No .jj directory found from {}", path.display())
     }
 
     fn run_jj(&self, args: &[&str]) -> Result<String> {
@@ -50,35 +43,17 @@ impl Backend for JjBackend {
         let mut staged = Vec::new();
 
         for line in output.lines() {
-            if line.starts_with("M ") {
-                unstaged.push(FileEntry {
-                    path: line[2..].trim().to_string(),
-                    kind: FileKind::Modified,
-                });
-            } else if line.starts_with("A ") {
-                staged.push(FileEntry {
-                    path: line[2..].trim().to_string(),
-                    kind: FileKind::Added,
-                });
-            } else if line.starts_with("D ") {
-                unstaged.push(FileEntry {
-                    path: line[2..].trim().to_string(),
-                    kind: FileKind::Deleted,
-                });
-            }
+            let Some((code, path)) = line.split_once(' ') else { continue };
+            let (list, kind) = match code {
+                "M" => (&mut unstaged, FileKind::Modified),
+                "A" => (&mut staged, FileKind::Added),
+                "D" => (&mut unstaged, FileKind::Deleted),
+                _ => continue,
+            };
+            list.push(FileEntry { path: path.trim().to_string(), kind });
         }
 
-        Ok(RepoStatus {
-            head: None,
-            head_short_hash: None,
-            head_summary: None,
-            upstream: None,
-            staged,
-            unstaged,
-            untracked: vec![],
-            unpushed: vec![],
-            unpushed_total: 0,
-        })
+        Ok(RepoStatus { staged, unstaged, ..Default::default() })
     }
 
     fn diff_file(&self, path: &str, _staged: bool) -> Result<String> {
@@ -131,18 +106,18 @@ impl Backend for JjBackend {
         bail!("reword not supported for jj backend")
     }
 
-    fn push(&self) -> Result<String> {
-        let out = self.run_jj(&["git", "push"])?;
-        Ok(if out.trim().is_empty() { "Push successful".into() } else { out.trim().to_string() })
+    fn push(&self) -> Result<()> {
+        self.run_jj(&["git", "push"])?;
+        Ok(())
     }
 
-    fn push_force_lease(&self) -> Result<String> {
-        anyhow::bail!("force-with-lease not supported for jj backend")
+    fn push_force_lease(&self) -> Result<()> {
+        bail!("force-with-lease not supported for jj backend")
     }
 
-    fn pull(&self) -> Result<String> {
-        let out = self.run_jj(&["git", "fetch"])?;
-        Ok(if out.trim().is_empty() { "Fetch successful".into() } else { out.trim().to_string() })
+    fn pull(&self) -> Result<()> {
+        self.run_jj(&["git", "fetch"])?;
+        Ok(())
     }
 
     fn apply_patch(&self, _patch: &str, _reverse: bool) -> Result<()> {
@@ -181,7 +156,7 @@ impl Backend for JjBackend {
         bail!("stash not supported for jj backend")
     }
 
-    fn stash_pop(&self) -> Result<()> {
+    fn stash_pop(&self, _index: usize) -> Result<()> {
         bail!("stash not supported for jj backend")
     }
 
@@ -234,17 +209,18 @@ impl Backend for JjBackend {
             &limit_str,
         ])?;
 
-        let mut commits = Vec::new();
-        for line in output.lines() {
-            let parts: Vec<&str> = line.splitn(4, '\x1f').collect();
-            if parts.len() >= 4 {
-                commits.push(CommitInfo {
-                    short_hash: parts[0].to_string(),
-                    summary: parts[1].to_string(),
-                    author: parts[2].to_string(),
-                });
-            }
-        }
-        Ok(commits)
+        Ok(output
+            .lines()
+            .filter_map(|line| {
+                let mut parts = line.splitn(4, '\x1f');
+                let (hash, summary, author, _timestamp) =
+                    (parts.next()?, parts.next()?, parts.next()?, parts.next()?);
+                Some(CommitInfo {
+                    short_hash: hash.to_string(),
+                    summary: summary.to_string(),
+                    author: author.to_string(),
+                })
+            })
+            .collect())
     }
 }

@@ -1,12 +1,12 @@
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Missing keys take their default, so a partial config.toml still applies.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
 pub struct Config {
     /// Override backend: "git" or "jj"
     pub backend: Option<String>,
-    /// Editor to use for commit messages (falls back to $EDITOR)
-    pub editor: Option<String>,
     /// Number of log entries to show in the log buffer
     pub log_limit: usize,
     /// Number of recent commits to show in the status buffer
@@ -17,7 +17,6 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             backend: None,
-            editor: None,
             log_limit: 50,
             recent_limit: 10,
         }
@@ -25,33 +24,37 @@ impl Default for Config {
 }
 
 impl Config {
+    /// Falls back to defaults when the file is missing or invalid.
     pub fn load() -> Self {
-        let config_path = Self::config_path();
-        if let Some(path) = config_path {
-            if path.exists() {
-                if let Ok(content) = std::fs::read_to_string(&path) {
-                    if let Ok(config) = toml::from_str::<Config>(&content) {
-                        return config;
-                    }
-                }
-            }
-        }
-        Config::default()
+        Self::config_path()
+            .and_then(|path| std::fs::read_to_string(path).ok())
+            .and_then(|content| toml::from_str(&content).ok())
+            .unwrap_or_default()
     }
 
     fn config_path() -> Option<PathBuf> {
-        let base = std::env::var("XDG_CONFIG_HOME")
-            .ok()
+        let base = std::env::var_os("XDG_CONFIG_HOME")
             .map(PathBuf::from)
-            .or_else(|| {
-                dirs_path()
-            })?;
+            .or_else(|| Some(PathBuf::from(std::env::var_os("HOME")?).join(".config")))?;
         Some(base.join("rugit").join("config.toml"))
     }
-
 }
 
-fn dirs_path() -> Option<PathBuf> {
-    let home = std::env::var("HOME").ok()?;
-    Some(PathBuf::from(home).join(".config"))
+#[cfg(test)]
+mod tests {
+    use super::Config;
+
+    #[test]
+    fn partial_config_keeps_other_defaults() {
+        let config: Config = toml::from_str("log_limit = 200").unwrap();
+        assert_eq!(config.log_limit, 200);
+        assert_eq!(config.recent_limit, Config::default().recent_limit);
+    }
+
+    #[test]
+    fn unknown_keys_are_ignored() {
+        // `editor` was a config key once; old files must still load.
+        let config: Config = toml::from_str("editor = \"vim\"\nrecent_limit = 3").unwrap();
+        assert_eq!(config.recent_limit, 3);
+    }
 }

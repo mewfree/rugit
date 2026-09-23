@@ -54,39 +54,28 @@ pub fn key_to_action(key: KeyEvent, pending: Option<KeyCode>) -> Action {
         }
     }
 
-    if let Some(pending_key) = pending {
-        // We have a pending key — resolve chord
-        match pending_key {
-            KeyCode::Char('c') => match key.code {
-                KeyCode::Char('c') => return Action::CommitConfirm,
-                KeyCode::Char('a') => return Action::CommitAmendConfirm,
-                KeyCode::Char('F') => return Action::FixupPick,
-                KeyCode::Char('s') => return Action::SquashPick,
-                KeyCode::Char('w') => return Action::RewordPick,
-                _ => return Action::None,
-            },
-            KeyCode::Char('p') => match key.code {
-                KeyCode::Char('p') => return Action::Push,
-                KeyCode::Char('f') => return Action::PushForce,
-                _ => return Action::None,
-            },
-            KeyCode::Char('z') => match key.code {
-                KeyCode::Char('z') => return Action::StashSave,
-                KeyCode::Char('p') => return Action::StashPop,
-                KeyCode::Char('a') => return Action::StashApply,
-                KeyCode::Char('d') => return Action::StashDrop,
-                KeyCode::Char('l') => return Action::StashList,
-                _ => return Action::None,
-            },
-            KeyCode::Char('b') => match key.code {
-                KeyCode::Char('b') => return Action::BranchCheckout,
-                KeyCode::Char('c') => return Action::BranchCreate,
-                KeyCode::Char('d') => return Action::BranchDelete,
-                KeyCode::Char('r') => return Action::BranchRename,
-                _ => return Action::None,
-            },
-            _ => {}
-        }
+    // Second key of a chord; anything unrecognised cancels it.
+    if let Some(KeyCode::Char(prefix @ ('c' | 'p' | 'z' | 'b'))) = pending {
+        let KeyCode::Char(second) = key.code else { return Action::None };
+        return match (prefix, second) {
+            ('c', 'c') => Action::CommitConfirm,
+            ('c', 'a') => Action::CommitAmendConfirm,
+            ('c', 'F') => Action::FixupPick,
+            ('c', 's') => Action::SquashPick,
+            ('c', 'w') => Action::RewordPick,
+            ('p', 'p') => Action::Push,
+            ('p', 'f') => Action::PushForce,
+            ('z', 'z') => Action::StashSave,
+            ('z', 'p') => Action::StashPop,
+            ('z', 'a') => Action::StashApply,
+            ('z', 'd') => Action::StashDrop,
+            ('z', 'l') => Action::StashList,
+            ('b', 'b') => Action::BranchCheckout,
+            ('b', 'c') => Action::BranchCreate,
+            ('b', 'd') => Action::BranchDelete,
+            ('b', 'r') => Action::BranchRename,
+            _ => Action::None,
+        };
     }
 
     match key.code {

@@ -46,6 +46,14 @@ Implement all Backend trait methods using =jj= subprocess calls.
 
 * Done
 
+** DONE Cleanup pass (dead code, dedup, allocation cuts)
+Remove dead code (=Config.editor=, unused push/pull output, clippy warnings);
+=run_git=/=pipe_git= helpers in the git backend; one =diff= module for hunk/line
+patch extraction; merge the three visual-selection handlers and the duplicated
+status sections; shared popup menu/picker rendering; split =run_app=; stop
+cloning diffs and status items per keypress/frame. Also: =#[serde(default)]= so a
+partial =config.toml= no longer silently drops every setting.
+
 ** DONE Performance pass (idle redraws, windowed status render, batched staging, fewer git walks)
 Windowed status rendering so per-frame work scales with the viewport rather than
 the item count; redraw only after an event instead of 4x/second while idle;

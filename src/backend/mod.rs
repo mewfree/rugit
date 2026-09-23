@@ -94,9 +94,9 @@ pub trait Backend {
     /// Replace the message of `hash` and replay later commits onto it.
     fn reword_commit(&self, hash: &str, message: &str) -> Result<()>;
     fn log(&self, limit: usize) -> Result<Vec<CommitInfo>>;
-    fn push(&self) -> Result<String>;
-    fn push_force_lease(&self) -> Result<String>;
-    fn pull(&self) -> Result<String>;
+    fn push(&self) -> Result<()>;
+    fn push_force_lease(&self) -> Result<()>;
+    fn pull(&self) -> Result<()>;
     fn show_commit(&self, hash: &str) -> Result<String>;
     fn apply_patch(&self, patch: &str, reverse: bool) -> Result<()>;
     fn discard_patch(&self, patch: &str) -> Result<()>;
@@ -107,7 +107,7 @@ pub trait Backend {
     fn fixup_commit(&self, hash: &str) -> Result<()>;
     fn squash_commit(&self, hash: &str) -> Result<()>;
     fn stash(&self) -> Result<()>;
-    fn stash_pop(&self) -> Result<()>;
+    fn stash_pop(&self, index: usize) -> Result<()>;
     fn stash_apply(&self, index: usize) -> Result<()>;
     fn stash_drop(&self, index: usize) -> Result<()>;
     fn stash_list(&self) -> Result<Vec<StashInfo>>;
@@ -124,18 +124,9 @@ pub enum BackendKind {
     Jj,
 }
 
-/// Walk up from `start` looking for a `.jj` directory.
-pub fn has_jj_repo(start: &Path) -> bool {
-    let mut cur = start.to_path_buf();
-    loop {
-        if cur.join(".jj").is_dir() {
-            return true;
-        }
-        if !cur.pop() {
-            break;
-        }
-    }
-    false
+/// The nearest ancestor of `start` (inclusive) holding a `.jj` directory.
+pub fn find_jj_root(start: &Path) -> Option<&Path> {
+    start.ancestors().find(|dir| dir.join(".jj").is_dir())
 }
 
 pub fn detect_backend(
@@ -143,31 +134,18 @@ pub fn detect_backend(
     forced: Option<BackendKind>,
     config: &Config,
 ) -> Result<Box<dyn Backend>> {
-    let p = std::path::PathBuf::from(path);
+    let path = Path::new(path);
 
-    // Resolve forced kind (CLI arg wins, then config)
-    let kind = forced.or_else(|| {
-        config.backend.as_deref().and_then(|s| match s {
-            "jj" => Some(BackendKind::Jj),
-            "git" => Some(BackendKind::Git),
-            _ => None,
-        })
-    });
+    // CLI arg wins, then config, then auto-detect (prefer jj if a .jj dir exists)
+    let kind = forced
+        .or_else(|| BackendKind::from_str(config.backend.as_deref()?, true).ok())
+        .unwrap_or_else(|| match find_jj_root(path) {
+            Some(_) => BackendKind::Jj,
+            None => BackendKind::Git,
+        });
 
-    match kind {
-        Some(BackendKind::Jj) => {
-            Ok(Box::new(jj::JjBackend::new(&p)?))
-        }
-        Some(BackendKind::Git) => {
-            Ok(Box::new(git::GitBackend::new(&p)?))
-        }
-        None => {
-            // Auto-detect: prefer jj if .jj dir found
-            if has_jj_repo(&p) {
-                Ok(Box::new(jj::JjBackend::new(&p)?))
-            } else {
-                Ok(Box::new(git::GitBackend::new(&p)?))
-            }
-        }
-    }
+    Ok(match kind {
+        BackendKind::Jj => Box::new(jj::JjBackend::new(path)?),
+        BackendKind::Git => Box::new(git::GitBackend::new(path)?),
+    })
 }

@@ -3,22 +3,26 @@ use anyhow::Result;
 use clap::Parser;
 use crossterm::{
     cursor::SetCursorStyle,
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseEventKind},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
+use tui_textarea::CursorMove;
 
 mod app;
-mod config;
-mod keybindings;
 mod backend;
+mod config;
+mod diff;
+mod keybindings;
 mod ui;
 
-use app::{ActiveBuffer, App, BranchNameInputState, BranchNameMode, BranchPickerMode, BranchPickerState, CommitPickerState, EditorIntent, EditorMode, EditorState, FixupMode, StashListState};
-use backend::{detect_backend, BackendKind};
+use app::{ActiveBuffer, App, BranchNameInputState, BranchNameMode, BranchPickerMode, BranchPickerState, CommitPickerState, CommitPreview, EditorIntent, EditorMode, EditorState, FixupMode, PatchOp, StashListState, StatusItem};
+use backend::{detect_backend, Backend, BackendKind};
 use config::Config;
 use keybindings::{key_to_action, Action};
+
+type Term = Terminal<CrosstermBackend<io::Stdout>>;
 
 #[derive(Parser, Debug)]
 #[command(name = "rugit", about = "A Magit-inspired git TUI", version)]
@@ -55,10 +59,8 @@ fn main() -> Result<()> {
 
     // Set up terminal
     enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-    let backend_term = CrosstermBackend::new(io::stdout());
-    let mut terminal = Terminal::new(backend_term)?;
+    execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
+    let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
 
     let result = run_app(&mut terminal, &mut app);
 
@@ -73,7 +75,7 @@ fn main() -> Result<()> {
     terminal.show_cursor()?;
 
     if let Err(err) = result {
-        eprintln!("Error: {:?}", err);
+        eprintln!("Error: {err:?}");
     }
 
     Ok(())
@@ -82,10 +84,7 @@ fn main() -> Result<()> {
 /// Draws the app and, when the commit-message editor is focused, switches the
 /// real terminal cursor to a thin bar in Insert mode or a block in Normal
 /// mode — matching (neo)vim's cursor behavior.
-fn draw(
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    app: &mut App,
-) -> Result<()> {
+fn draw(terminal: &mut Term, app: &App) -> Result<()> {
     terminal.draw(|f| ui::render(f, app))?;
     let style = match (&app.buffer, &app.editor) {
         (ActiveBuffer::Editor, Some(editor)) => match editor.mode {
@@ -98,943 +97,621 @@ fn draw(
     Ok(())
 }
 
-fn run_app(
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    app: &mut App,
-) -> Result<()> {
-    // Redraw only after an event; otherwise we rebuild every widget 4x/second idle.
+fn run_app(terminal: &mut Term, app: &mut App) -> Result<()> {
+    // The screen only changes in response to an event, so block on the next
+    // one and redraw only when it could have changed something.
     let mut needs_redraw = true;
-
-    loop {
+    while !app.should_quit {
         if needs_redraw {
             draw(terminal, app)?;
-            needs_redraw = false;
         }
-
-        if event::poll(std::time::Duration::from_millis(250))? {
-            // Key, mouse or resize can all change the screen.
-            needs_redraw = true;
-            match event::read()? {
-            Event::Mouse(mouse) => {
-                match mouse.kind {
-                    MouseEventKind::ScrollDown => {
-                        if let Some((_, _, ref mut scroll)) = app.commit_preview {
-                            *scroll = scroll.saturating_add(3);
-                        } else {
-                            app.move_down();
-                        }
-                    }
-                    MouseEventKind::ScrollUp => {
-                        if let Some((_, _, ref mut scroll)) = app.commit_preview {
-                            *scroll = scroll.saturating_sub(3);
-                        } else {
-                            app.move_up();
-                        }
-                    }
-                    _ => {}
-                }
-                if app.should_quit { break; }
-            }
+        needs_redraw = match event::read()? {
+            // Ignore release/repeat events reported on some platforms.
+            Event::Key(key) if key.kind != KeyEventKind::Press => false,
             Event::Key(key) => {
-                // Only process key press events (ignore release/repeat on some platforms)
-                if key.kind != KeyEventKind::Press {
-                    continue;
-                }
-
-                // Handle stash list popup
-                if app.stash_list.is_some() {
-                    match key.code {
-                        KeyCode::Esc => {
-                            app.stash_list = None;
-                            app.status_msg = None;
-                        }
-                        KeyCode::Char('j') | KeyCode::Down => {
-                            if let Some(ref mut sl) = app.stash_list {
-                                if sl.cursor + 1 < sl.stashes.len() {
-                                    sl.cursor += 1;
-                                }
-                            }
-                        }
-                        KeyCode::Char('k') | KeyCode::Up => {
-                            if let Some(ref mut sl) = app.stash_list {
-                                if sl.cursor > 0 {
-                                    sl.cursor -= 1;
-                                }
-                            }
-                        }
-                        KeyCode::Char('a') => {
-                            if let Some(sl) = app.stash_list.take() {
-                                match app.backend.stash_apply(sl.stashes[sl.cursor].index) {
-                                    Ok(_) => { let _ = app.refresh(); app.status_msg = Some("Stash applied".to_string()); }
-                                    Err(e) => { app.status_msg = Some(format!("Error: {}", e)); }
-                                }
-                            }
-                        }
-                        KeyCode::Char('p') => {
-                            if let Some(sl) = app.stash_list.take() {
-                                match app.backend.stash_apply(sl.stashes[sl.cursor].index) {
-                                    Ok(_) => {
-                                        let idx = sl.stashes[sl.cursor].index;
-                                        let _ = app.backend.stash_drop(idx);
-                                        let _ = app.refresh();
-                                        app.status_msg = Some("Stash popped".to_string());
-                                    }
-                                    Err(e) => { app.status_msg = Some(format!("Error: {}", e)); }
-                                }
-                            }
-                        }
-                        KeyCode::Char('d') => {
-                            if let Some(sl) = app.stash_list.take() {
-                                match app.backend.stash_drop(sl.stashes[sl.cursor].index) {
-                                    Ok(_) => { let _ = app.refresh(); app.status_msg = Some("Stash dropped".to_string()); }
-                                    Err(e) => { app.status_msg = Some(format!("Error: {}", e)); }
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
-                    continue;
-                }
-
-                // Handle log search input popup — filters the log list live as you type
-                if app.log_search.is_some() {
-                    match key.code {
-                        KeyCode::Esc => {
-                            app.log_search = None;
-                            app.set_log_filter(None);
-                            app.cursor = 0;
-                        }
-                        KeyCode::Enter => {
-                            // Keep the filter applied; just close the input prompt
-                            // so j/k browse the filtered list.
-                            app.log_search = None;
-                        }
-                        KeyCode::Backspace => {
-                            if let Some(ref mut input) = app.log_search {
-                                input.pop();
-                            }
-                            let q = app.log_search.clone();
-                            app.set_log_filter(q);
-                            app.cursor = 0;
-                        }
-                        KeyCode::Char(c) => {
-                            if let Some(ref mut input) = app.log_search {
-                                input.push(c);
-                            }
-                            let q = app.log_search.clone();
-                            app.set_log_filter(q);
-                            app.cursor = 0;
-                        }
-                        _ => {}
-                    }
-                    continue;
-                }
-
-                // '/' starts a log filter; Esc clears an already-applied one (log buffer only)
-                if app.buffer == ActiveBuffer::Log {
-                    match key.code {
-                        KeyCode::Char('/') => {
-                            app.log_search = Some(String::new());
-                            app.set_log_filter(Some(String::new()));
-                            app.cursor = 0;
-                            app.status_msg = None;
-                            continue;
-                        }
-                        KeyCode::Esc if app.log_filter.is_some() => {
-                            app.set_log_filter(None);
-                            app.cursor = 0;
-                            continue;
-                        }
-                        _ => {}
-                    }
-                }
-
-                // Handle branch name input popup
-                if app.branch_name_input.is_some() {
-                    match key.code {
-                        KeyCode::Esc => {
-                            app.branch_name_input = None;
-                            app.pending_key = None;
-                            app.status_msg = None;
-                        }
-                        KeyCode::Enter => {
-                            if let Some(state) = app.branch_name_input.take() {
-                                app.pending_key = None;
-                                let name = state.input.trim().to_string();
-                                if name.is_empty() {
-                                    app.status_msg = Some("Cancelled: empty name".to_string());
-                                } else {
-                                    let result = match state.mode {
-                                        BranchNameMode::Create => app.backend.create_branch(&name),
-                                        BranchNameMode::Rename => app.backend.rename_branch(&state.original, &name),
-                                    };
-                                    match result {
-                                        Ok(_) => {
-                                            let _ = app.refresh();
-                                            app.status_msg = Some(match state.mode {
-                                                BranchNameMode::Create => format!("Created and switched to '{}'", name),
-                                                BranchNameMode::Rename => format!("Renamed to '{}'", name),
-                                            });
-                                        }
-                                        Err(e) => {
-                                            app.status_msg = Some(format!("Error: {}", first_line(&e.to_string())));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        KeyCode::Backspace => {
-                            if let Some(ref mut state) = app.branch_name_input {
-                                state.input.pop();
-                            }
-                        }
-                        KeyCode::Char(c) => {
-                            if let Some(ref mut state) = app.branch_name_input {
-                                state.input.push(c);
-                            }
-                        }
-                        _ => {}
-                    }
-                    continue;
-                }
-
-                // Handle branch picker popup (checkout / delete)
-                if app.branch_picker.is_some() {
-                    match key.code {
-                        KeyCode::Esc => {
-                            app.branch_picker = None;
-                            app.pending_key = None;
-                            app.status_msg = None;
-                        }
-                        KeyCode::Char('j') | KeyCode::Down => {
-                            if let Some(ref mut bp) = app.branch_picker {
-                                if bp.cursor + 1 < bp.branches.len() {
-                                    bp.cursor += 1;
-                                }
-                            }
-                        }
-                        KeyCode::Char('k') | KeyCode::Up => {
-                            if let Some(ref mut bp) = app.branch_picker {
-                                if bp.cursor > 0 {
-                                    bp.cursor -= 1;
-                                }
-                            }
-                        }
-                        KeyCode::Enter => {
-                            if let Some(bp) = app.branch_picker.take() {
-                                app.pending_key = None;
-                                if let Some(branch) = bp.branches.get(bp.cursor) {
-                                    let name = branch.name.clone();
-                                    let result = match bp.mode {
-                                        BranchPickerMode::Checkout => app.backend.checkout_branch(&name),
-                                        BranchPickerMode::Delete => {
-                                            if branch.is_current {
-                                                Err(anyhow::anyhow!("Cannot delete the currently checked-out branch"))
-                                            } else {
-                                                app.backend.delete_branch(&name)
-                                            }
-                                        }
-                                    };
-                                    match result {
-                                        Ok(_) => {
-                                            let _ = app.refresh();
-                                            app.status_msg = Some(match bp.mode {
-                                                BranchPickerMode::Checkout => format!("Switched to '{}'", name),
-                                                BranchPickerMode::Delete   => format!("Deleted '{}'", name),
-                                            });
-                                        }
-                                        Err(e) => {
-                                            app.status_msg = Some(format!("Error: {}", first_line(&e.to_string())));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
-                    continue;
-                }
-
-                // Handle commit picker popup (fixup/squash)
-                if app.commit_picker.is_some() {
-                    match key.code {
-                        KeyCode::Esc => {
-                            app.commit_picker = None;
-                            app.status_msg = None;
-                        }
-                        KeyCode::Char('j') | KeyCode::Down => {
-                            if let Some(ref mut picker) = app.commit_picker {
-                                if picker.cursor + 1 < picker.commits.len() {
-                                    picker.cursor += 1;
-                                }
-                            }
-                        }
-                        KeyCode::Char('k') | KeyCode::Up => {
-                            if let Some(ref mut picker) = app.commit_picker {
-                                if picker.cursor > 0 {
-                                    picker.cursor -= 1;
-                                }
-                            }
-                        }
-                        KeyCode::Enter => {
-                            if let Some(picker) = app.commit_picker.take() {
-                                if let Some(commit) = picker.commits.get(picker.cursor) {
-                                    let hash = commit.short_hash.clone();
-                                    let summary = commit.summary.clone();
-                                    match picker.mode {
-                                        FixupMode::Reword => {
-                                            if let Err(e) = do_reword(app, &hash, &summary) {
-                                                app.status_msg = Some(format!("Error: {}", e));
-                                            }
-                                        }
-                                        FixupMode::Fixup => {
-                                            let result = app.backend.fixup_commit(&hash);
-                                            finish_instant(app, result, format!("Fixed up into {}", hash));
-                                        }
-                                        FixupMode::Squash => {
-                                            let result = app.backend.squash_commit(&hash);
-                                            finish_instant(app, result, format!("Squashed into {}", hash));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
-                    continue;
-                }
-
-                // Handle commit preview popup — scroll or dismiss
-                if app.commit_preview.is_some() {
-                    match key.code {
-                        KeyCode::Char('q') | KeyCode::Esc => app.commit_preview = None,
-                        KeyCode::Char('j') | KeyCode::Down => {
-                            if let Some((_, _, ref mut scroll)) = app.commit_preview {
-                                *scroll = scroll.saturating_add(1);
-                            }
-                        }
-                        KeyCode::Char('k') | KeyCode::Up => {
-                            if let Some((_, _, ref mut scroll)) = app.commit_preview {
-                                *scroll = scroll.saturating_sub(1);
-                            }
-                        }
-                        KeyCode::Char('d') => {
-                            if let Some((_, _, ref mut scroll)) = app.commit_preview {
-                                *scroll = scroll.saturating_add(20);
-                            }
-                        }
-                        KeyCode::Char('u') => {
-                            if let Some((_, _, ref mut scroll)) = app.commit_preview {
-                                *scroll = scroll.saturating_sub(20);
-                            }
-                        }
-                        _ => {}
-                    }
-                    continue;
-                }
-
-                // Route to inline editor if in editor mode
-                if app.buffer == ActiveBuffer::Editor {
-                    handle_editor_key(app, key);
-                    if app.should_quit {
-                        break;
-                    }
-                    continue;
-                }
-
-                // Esc exits visual mode if active
-                if key.code == KeyCode::Esc && app.visual_anchor.is_some() {
-                    app.visual_anchor = None;
-                    app.status_msg = None;
-                    continue;
-                }
-
-                // Clear status message on any keypress
-                app.status_msg = None;
-
-                let action = key_to_action(key, app.pending_key);
-
-                match action {
-                    Action::Quit => {
-                        if app.buffer == ActiveBuffer::Help || app.buffer == ActiveBuffer::Log {
-                            app.buffer = ActiveBuffer::Status;
-                            app.cursor = 0;
-                            app.pending_key = None;
-                        } else {
-                            app.should_quit = true;
-                        }
-                    }
-                    Action::HideHelp => {
-                        if app.buffer == ActiveBuffer::Help {
-                            app.buffer = ActiveBuffer::Status;
-                        }
-                        app.pending_key = None;
-                    }
-                    Action::MoveDown => {
-                        app.move_down();
-                        app.pending_key = None;
-                    }
-                    Action::MoveUp => {
-                        app.move_up();
-                        app.pending_key = None;
-                    }
-                    Action::PageDown => {
-                        let amount = (terminal.size()?.height as usize / 2).max(1);
-                        app.move_page_down(amount);
-                        app.pending_key = None;
-                    }
-                    Action::PageUp => {
-                        let amount = (terminal.size()?.height as usize / 2).max(1);
-                        app.move_page_up(amount);
-                        app.pending_key = None;
-                    }
-                    Action::StageFile => {
-                        if app.visual_anchor.is_some() {
-                            if let Err(e) = app.stage_visual_selection() {
-                                app.status_msg = Some(format!("Error: {}", e));
-                            }
-                        } else if let Err(e) = app.stage_at_cursor() {
-                            app.status_msg = Some(format!("Error: {}", e));
-                        }
-                        app.pending_key = None;
-                    }
-                    Action::UnstageFile => {
-                        if app.visual_anchor.is_some() {
-                            if let Err(e) = app.unstage_visual_selection() {
-                                app.status_msg = Some(format!("Error: {}", e));
-                            }
-                        } else if let Err(e) = app.unstage_at_cursor() {
-                            app.status_msg = Some(format!("Error: {}", e));
-                        }
-                        app.pending_key = None;
-                    }
-                    Action::DiscardFile => {
-                        if app.visual_anchor.is_some() {
-                            if let Err(e) = app.discard_visual_selection() {
-                                app.status_msg = Some(format!("Error: {}", e));
-                            }
-                        } else if let Err(e) = app.discard_at_cursor() {
-                            app.status_msg = Some(format!("Error: {}", e));
-                        }
-                        app.pending_key = None;
-                    }
-                    Action::StageAll => {
-                        if let Err(e) = app.stage_all() {
-                            app.status_msg = Some(format!("Error: {}", e));
-                        }
-                        app.pending_key = None;
-                    }
-                    Action::UnstageAll => {
-                        if let Err(e) = app.unstage_all() {
-                            app.status_msg = Some(format!("Error: {}", e));
-                        }
-                        app.pending_key = None;
-                    }
-                    Action::ToggleExpand => {
-                        if let Err(e) = app.toggle_expand_at_cursor() {
-                            app.status_msg = Some(format!("Error: {}", e));
-                        }
-                        app.pending_key = None;
-                    }
-                    Action::SwitchToLog => {
-                        if let Err(e) = app.load_log() {
-                            app.status_msg = Some(format!("Error loading log: {}", e));
-                        } else {
-                            app.buffer = ActiveBuffer::Log;
-                            app.cursor = 0;
-                            app.set_log_filter(None);
-                        }
-                        app.pending_key = None;
-                    }
-                    Action::Refresh => {
-                        if let Err(e) = app.refresh() {
-                            app.status_msg = Some(format!("Error refreshing: {}", e));
-                        }
-                        app.pending_key = None;
-                    }
-                    Action::ShowHelp => {
-                        app.buffer = ActiveBuffer::Help;
-                        app.pending_key = None;
-                    }
-                    Action::Enter => {
-                        if let Some(crate::app::StatusItem::RecentCommit { info }) =
-                            app.items.get(app.cursor).cloned()
-                        {
-                            match app.backend.show_commit(&info.short_hash) {
-                                Ok(content) => {
-                                    app.commit_preview = Some((
-                                        format!("{} {}", info.short_hash, info.summary),
-                                        content,
-                                        0,
-                                    ));
-                                }
-                                Err(e) => {
-                                    app.status_msg = Some(format!("Error: {}", e));
-                                }
-                            }
-                        }
-                        app.pending_key = None;
-                    }
-                    Action::CommitBegin => {
-                        app.pending_key = Some(crossterm::event::KeyCode::Char('c'));
-                        app.status_msg = Some("c-".to_string());
-                    }
-                    Action::CommitConfirm => {
-                        app.pending_key = None;
-                        do_commit(app);
-                    }
-                    Action::CommitAmendConfirm => {
-                        app.pending_key = None;
-                        if let Err(e) = do_commit_amend(app) {
-                            app.status_msg = Some(format!("Amend error: {}", e));
-                        }
-                    }
-                    Action::FixupPick => {
-                        app.pending_key = None;
-                        match app.backend.log(app.config.log_limit) {
-                            Ok(commits) if !commits.is_empty() => {
-                                app.commit_picker = Some(CommitPickerState {
-                                    commits,
-                                    cursor: 0,
-                                    mode: FixupMode::Fixup,
-                                });
-                            }
-                            Ok(_) => {
-                                app.status_msg = Some("No commits to fixup into".to_string());
-                            }
-                            Err(e) => {
-                                app.status_msg = Some(format!("Error loading commits: {}", e));
-                            }
-                        }
-                    }
-                    Action::SquashPick => {
-                        app.pending_key = None;
-                        match app.backend.log(app.config.log_limit) {
-                            Ok(commits) if !commits.is_empty() => {
-                                app.commit_picker = Some(CommitPickerState {
-                                    commits,
-                                    cursor: 0,
-                                    mode: FixupMode::Squash,
-                                });
-                            }
-                            Ok(_) => {
-                                app.status_msg = Some("No commits to squash into".to_string());
-                            }
-                            Err(e) => {
-                                app.status_msg = Some(format!("Error loading commits: {}", e));
-                            }
-                        }
-                    }
-                    Action::RewordPick => {
-                        app.pending_key = None;
-                        match app.backend.log(app.config.log_limit) {
-                            Ok(commits) if !commits.is_empty() => {
-                                app.commit_picker = Some(CommitPickerState {
-                                    commits,
-                                    cursor: 0,
-                                    mode: FixupMode::Reword,
-                                });
-                            }
-                            Ok(_) => {
-                                app.status_msg = Some("No commits to reword".to_string());
-                            }
-                            Err(e) => {
-                                app.status_msg = Some(format!("Error loading commits: {}", e));
-                            }
-                        }
-                    }
-                    Action::PushBegin => {
-                        app.pending_key = Some(crossterm::event::KeyCode::Char('p'));
-                        app.status_msg = Some("P-".to_string());
-                    }
-                    Action::Push => {
-                        app.pending_key = None;
-                        app.status_msg = Some("Pushing…".to_string());
-                        draw(terminal, app)?;
-                        match app.backend.push() {
-                            Ok(_)  => app.status_msg = Some("Pushed.".to_string()),
-                            Err(e) => app.status_msg = Some(format!("Push failed: {}", first_line(&e.to_string()))),
-                        }
-                        let _ = app.refresh();
-                    }
-                    Action::PushForce => {
-                        app.pending_key = None;
-                        app.status_msg = Some("Force-pushing…".to_string());
-                        draw(terminal, app)?;
-                        match app.backend.push_force_lease() {
-                            Ok(_)  => app.status_msg = Some("Force-pushed.".to_string()),
-                            Err(e) => app.status_msg = Some(format!("Force-push failed: {}", first_line(&e.to_string()))),
-                        }
-                        let _ = app.refresh();
-                    }
-                    Action::Pull => {
-                        app.pending_key = None;
-                        app.status_msg = Some("Pulling…".to_string());
-                        draw(terminal, app)?;
-                        match app.backend.pull() {
-                            Ok(_)  => app.status_msg = Some("Pulled.".to_string()),
-                            Err(e) => app.status_msg = Some(format!("Pull failed: {}", first_line(&e.to_string()))),
-                        }
-                        let _ = app.refresh();
-                    }
-                    Action::VisualMode => {
-                        app.visual_anchor = Some(app.cursor);
-                        app.status_msg = Some("-- VISUAL --".to_string());
-                        app.pending_key = None;
-                    }
-                    Action::StashBegin => {
-                        app.pending_key = Some(crossterm::event::KeyCode::Char('z'));
-                        app.status_msg = Some("z-".to_string());
-                    }
-                    Action::StashSave => {
-                        app.pending_key = None;
-                        match app.backend.stash() {
-                            Ok(_) => { let _ = app.refresh(); app.status_msg = Some("Stashed changes".to_string()); }
-                            Err(e) => { app.status_msg = Some(format!("Stash failed: {}", first_line(&e.to_string()))); }
-                        }
-                    }
-                    Action::StashPop => {
-                        app.pending_key = None;
-                        match app.backend.stash_pop() {
-                            Ok(_) => { let _ = app.refresh(); app.status_msg = Some("Popped stash".to_string()); }
-                            Err(e) => { app.status_msg = Some(format!("Stash pop failed: {}", first_line(&e.to_string()))); }
-                        }
-                    }
-                    Action::StashApply => {
-                        app.pending_key = None;
-                        match app.backend.stash_apply(0) {
-                            Ok(_) => { let _ = app.refresh(); app.status_msg = Some("Applied stash".to_string()); }
-                            Err(e) => { app.status_msg = Some(format!("Stash apply failed: {}", first_line(&e.to_string()))); }
-                        }
-                    }
-                    Action::StashDrop => {
-                        app.pending_key = None;
-                        match app.backend.stash_drop(0) {
-                            Ok(_) => { let _ = app.refresh(); app.status_msg = Some("Dropped stash".to_string()); }
-                            Err(e) => { app.status_msg = Some(format!("Stash drop failed: {}", first_line(&e.to_string()))); }
-                        }
-                    }
-                    Action::StashList => {
-                        app.pending_key = None;
-                        match app.backend.stash_list() {
-                            Ok(stashes) if stashes.is_empty() => {
-                                app.status_msg = Some("No stashes".to_string());
-                            }
-                            Ok(stashes) => {
-                                app.stash_list = Some(StashListState { stashes, cursor: 0 });
-                            }
-                            Err(e) => {
-                                app.status_msg = Some(format!("Error: {}", e));
-                            }
-                        }
-                    }
-                    Action::BranchBegin => {
-                        app.pending_key = Some(crossterm::event::KeyCode::Char('b'));
-                        app.status_msg = Some("b-".to_string());
-                    }
-                    Action::BranchCheckout => {
-                        app.pending_key = None;
-                        match app.backend.list_branches() {
-                            Ok(branches) if branches.is_empty() => {
-                                app.status_msg = Some("No local branches".to_string());
-                            }
-                            Ok(branches) => {
-                                let cursor = branches.iter().position(|b| b.is_current).unwrap_or(0);
-                                app.branch_picker = Some(BranchPickerState {
-                                    branches,
-                                    cursor,
-                                    mode: BranchPickerMode::Checkout,
-                                });
-                            }
-                            Err(e) => {
-                                app.status_msg = Some(format!("Error: {}", first_line(&e.to_string())));
-                            }
-                        }
-                    }
-                    Action::BranchCreate => {
-                        app.pending_key = None;
-                        app.branch_name_input = Some(BranchNameInputState {
-                            input: String::new(),
-                            mode: BranchNameMode::Create,
-                            original: String::new(),
-                        });
-                    }
-                    Action::BranchDelete => {
-                        app.pending_key = None;
-                        match app.backend.list_branches() {
-                            Ok(branches) if branches.is_empty() => {
-                                app.status_msg = Some("No local branches".to_string());
-                            }
-                            Ok(branches) => {
-                                let cursor = branches.iter().position(|b| !b.is_current).unwrap_or(0);
-                                app.branch_picker = Some(BranchPickerState {
-                                    branches,
-                                    cursor,
-                                    mode: BranchPickerMode::Delete,
-                                });
-                            }
-                            Err(e) => {
-                                app.status_msg = Some(format!("Error: {}", first_line(&e.to_string())));
-                            }
-                        }
-                    }
-                    Action::BranchRename => {
-                        app.pending_key = None;
-                        let current = app.status.head.clone().unwrap_or_default();
-                        app.branch_name_input = Some(BranchNameInputState {
-                            input: current.clone(),
-                            mode: BranchNameMode::Rename,
-                            original: current,
-                        });
-                    }
-                    Action::None => {
-                        // Clear pending key if it doesn't form a valid chord
-                        app.pending_key = None;
-                    }
-                }
-
-                if app.should_quit {
-                    break;
-                }
+                handle_key(terminal, app, key)?;
+                true
             }
-            _ => {}
-            }
-        }
+            Event::Mouse(mouse) => handle_mouse(app, mouse.kind),
+            _ => true, // resize
+        };
     }
     Ok(())
 }
 
-fn finish_instant(app: &mut App, result: Result<()>, ok_msg: String) {
+/// Scroll wheel scrolls the commit preview if open, else moves the cursor.
+/// Returns whether anything changed.
+fn handle_mouse(app: &mut App, kind: MouseEventKind) -> bool {
+    let down = match kind {
+        MouseEventKind::ScrollDown => true,
+        MouseEventKind::ScrollUp => false,
+        _ => return false,
+    };
+    match app.commit_preview.as_mut() {
+        Some(preview) => preview.scroll_by(if down { 3 } else { -3 }),
+        None if down => app.move_down(),
+        None => app.move_up(),
+    }
+    true
+}
+
+/// Route a keypress to the open popup, the editor, or the active buffer.
+fn handle_key(terminal: &mut Term, app: &mut App, key: KeyEvent) -> Result<()> {
+    let code = key.code;
+    let log_filter_key = app.buffer == ActiveBuffer::Log
+        && (code == KeyCode::Char('/') || (code == KeyCode::Esc && app.log_filter.is_some()));
+
+    if app.stash_list.is_some() {
+        handle_stash_list_key(app, code);
+    } else if app.log_search.is_some() {
+        handle_log_search_key(app, code);
+    } else if log_filter_key {
+        if code == KeyCode::Char('/') {
+            app.log_search = Some(String::new());
+            app.set_log_filter(Some(String::new()));
+            app.status_msg = None;
+        } else {
+            app.set_log_filter(None);
+        }
+    } else if app.branch_name_input.is_some() {
+        handle_branch_name_key(app, code);
+    } else if app.branch_picker.is_some() {
+        handle_branch_picker_key(app, code);
+    } else if app.commit_picker.is_some() {
+        handle_commit_picker_key(app, code);
+    } else if app.commit_preview.is_some() {
+        handle_preview_key(app, code);
+    } else if app.buffer == ActiveBuffer::Editor {
+        handle_editor_key(app, key);
+    } else if code == KeyCode::Esc && app.visual_anchor.is_some() {
+        app.visual_anchor = None;
+        app.status_msg = None;
+    } else {
+        app.status_msg = None;
+        // A chord prefix only applies to the next key.
+        let action = key_to_action(key, app.pending_key.take());
+        handle_action(terminal, app, action)?;
+    }
+    Ok(())
+}
+
+/// j/k movement in a popup list. Returns whether `code` was a movement key.
+fn step_cursor(cursor: &mut usize, len: usize, code: KeyCode) -> bool {
+    match code {
+        KeyCode::Char('j') | KeyCode::Down => {
+            if *cursor + 1 < len {
+                *cursor += 1;
+            }
+        }
+        KeyCode::Char('k') | KeyCode::Up => *cursor = cursor.saturating_sub(1),
+        _ => return false,
+    }
+    true
+}
+
+fn first_line(s: &str) -> &str {
+    s.lines().next().unwrap_or(s)
+}
+
+/// Show an error in the footer. Git errors can span many lines; the footer has one.
+fn show_error(app: &mut App, prefix: &str, err: &anyhow::Error) {
+    app.status_msg = Some(format!("{prefix}: {}", first_line(&err.to_string())));
+}
+
+fn report(app: &mut App, result: Result<()>) {
+    if let Err(e) = result {
+        show_error(app, "Error", &e);
+    }
+}
+
+/// After an operation that changes the repo: refresh and show `done`, or the error.
+fn finish(app: &mut App, result: Result<()>, done: impl Into<String>, failed: &str) {
     match result {
-        Ok(_) => {
+        Ok(()) => {
             let _ = app.refresh();
-            app.status_msg = Some(ok_msg);
+            app.status_msg = Some(done.into());
         }
-        Err(e) => app.status_msg = Some(format!("Error: {}", e)),
+        Err(e) => show_error(app, failed, &e),
     }
 }
 
-/// Open the inline TUI commit editor for a new commit.
-fn do_commit(app: &mut App) {
-    let comments = get_staged_summary(app);
-    let mut comment_lines = vec![
-        "Enter commit message above.".to_string(),
-        "Lines starting with # are ignored.".to_string(),
-        String::new(),
-        "Staged changes:".to_string(),
-    ];
-    comment_lines.extend(comments.into_iter().map(|l| format!("  {}", l)));
-    app.editor = Some(EditorState::new(
-        "Commit Message".to_string(),
-        String::new(),
-        comment_lines,
-        EditorIntent::Commit,
-    ));
-    app.buffer = ActiveBuffer::Editor;
+fn handle_stash_list_key(app: &mut App, code: KeyCode) {
+    let Some(list) = app.stash_list.as_mut() else { return };
+    if step_cursor(&mut list.cursor, list.stashes.len(), code) {
+        return;
+    }
+    type StashOp = fn(&dyn Backend, usize) -> Result<()>;
+    let (op, done): (StashOp, &str) = match code {
+        KeyCode::Char('a') => (|b, i| b.stash_apply(i), "Stash applied"),
+        KeyCode::Char('p') => (|b, i| b.stash_pop(i), "Stash popped"),
+        KeyCode::Char('d') => (|b, i| b.stash_drop(i), "Stash dropped"),
+        KeyCode::Esc => {
+            app.stash_list = None;
+            app.status_msg = None;
+            return;
+        }
+        _ => return,
+    };
+    if let Some(list) = app.stash_list.take() {
+        let result = op(app.backend.as_ref(), list.stashes[list.cursor].index);
+        finish(app, result, done, "Error");
+    }
 }
 
-/// Open the inline TUI commit editor for an amend.
-fn do_commit_amend(app: &mut App) -> Result<()> {
-    let last_message = app.backend.head_commit_message().unwrap_or_default();
+/// Typing in the log search prompt filters the log live.
+fn handle_log_search_key(app: &mut App, code: KeyCode) {
+    let Some(input) = app.log_search.as_mut() else { return };
+    match code {
+        KeyCode::Esc => {
+            app.log_search = None;
+            app.set_log_filter(None);
+            return;
+        }
+        // Keep the filter applied; just close the prompt so j/k browse the filtered list.
+        KeyCode::Enter => {
+            app.log_search = None;
+            return;
+        }
+        KeyCode::Backspace => { input.pop(); }
+        KeyCode::Char(c) => input.push(c),
+        _ => return,
+    }
+    let query = input.clone();
+    app.set_log_filter(Some(query));
+}
 
-    let comments = get_staged_summary(app);
-    let mut comment_lines = vec![
-        "Amend the commit message above.".to_string(),
-        "Lines starting with # are ignored.".to_string(),
-        String::new(),
-        "Staged changes (will be included in amended commit):".to_string(),
-    ];
-    comment_lines.extend(comments.into_iter().map(|l| format!("  {}", l)));
-    app.editor = Some(EditorState::new(
-        "Amend Commit".to_string(),
-        last_message,
-        comment_lines,
-        EditorIntent::Amend,
-    ));
-    app.buffer = ActiveBuffer::Editor;
+fn handle_branch_name_key(app: &mut App, code: KeyCode) {
+    let Some(state) = app.branch_name_input.as_mut() else { return };
+    match code {
+        KeyCode::Esc => {
+            app.branch_name_input = None;
+            app.status_msg = None;
+        }
+        KeyCode::Backspace => { state.input.pop(); }
+        KeyCode::Char(c) => state.input.push(c),
+        KeyCode::Enter => {
+            let Some(state) = app.branch_name_input.take() else { return };
+            let name = state.input.trim();
+            if name.is_empty() {
+                app.status_msg = Some("Cancelled: empty name".to_string());
+                return;
+            }
+            let (result, done) = match state.mode {
+                BranchNameMode::Create => (app.backend.create_branch(name), format!("Created and switched to '{name}'")),
+                BranchNameMode::Rename => (app.backend.rename_branch(&state.original, name), format!("Renamed to '{name}'")),
+            };
+            finish(app, result, done, "Error");
+        }
+        _ => {}
+    }
+}
+
+fn handle_branch_picker_key(app: &mut App, code: KeyCode) {
+    let Some(picker) = app.branch_picker.as_mut() else { return };
+    if step_cursor(&mut picker.cursor, picker.branches.len(), code) {
+        return;
+    }
+    match code {
+        KeyCode::Esc => {
+            app.branch_picker = None;
+            app.status_msg = None;
+        }
+        KeyCode::Enter => {
+            let Some(picker) = app.branch_picker.take() else { return };
+            let Some(branch) = picker.branches.get(picker.cursor) else { return };
+            let name = &branch.name;
+            let (result, done) = match picker.mode {
+                BranchPickerMode::Checkout => (app.backend.checkout_branch(name), format!("Switched to '{name}'")),
+                BranchPickerMode::Delete if branch.is_current => (
+                    Err(anyhow::anyhow!("Cannot delete the currently checked-out branch")),
+                    String::new(),
+                ),
+                BranchPickerMode::Delete => (app.backend.delete_branch(name), format!("Deleted '{name}'")),
+            };
+            finish(app, result, done, "Error");
+        }
+        _ => {}
+    }
+}
+
+/// Fixup/squash/reword target picker.
+fn handle_commit_picker_key(app: &mut App, code: KeyCode) {
+    let Some(picker) = app.commit_picker.as_mut() else { return };
+    if step_cursor(&mut picker.cursor, picker.commits.len(), code) {
+        return;
+    }
+    match code {
+        KeyCode::Esc => {
+            app.commit_picker = None;
+            app.status_msg = None;
+        }
+        KeyCode::Enter => {
+            let Some(picker) = app.commit_picker.take() else { return };
+            let Some(commit) = picker.commits.get(picker.cursor) else { return };
+            let hash = &commit.short_hash;
+            match picker.mode {
+                FixupMode::Reword => {
+                    let result = open_reword_editor(app, hash, &commit.summary);
+                    report(app, result);
+                }
+                FixupMode::Fixup => {
+                    let result = app.backend.fixup_commit(hash);
+                    finish(app, result, format!("Fixed up into {hash}"), "Error");
+                }
+                FixupMode::Squash => {
+                    let result = app.backend.squash_commit(hash);
+                    finish(app, result, format!("Squashed into {hash}"), "Error");
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn handle_preview_key(app: &mut App, code: KeyCode) {
+    let Some(preview) = app.commit_preview.as_mut() else { return };
+    match code {
+        KeyCode::Char('q') | KeyCode::Esc => app.commit_preview = None,
+        KeyCode::Char('j') | KeyCode::Down => preview.scroll_by(1),
+        KeyCode::Char('k') | KeyCode::Up => preview.scroll_by(-1),
+        KeyCode::Char('d') => preview.scroll_by(20),
+        KeyCode::Char('u') => preview.scroll_by(-20),
+        _ => {}
+    }
+}
+
+fn handle_action(terminal: &mut Term, app: &mut App, action: Action) -> Result<()> {
+    match action {
+        Action::Quit => {
+            if matches!(app.buffer, ActiveBuffer::Help | ActiveBuffer::Log) {
+                app.buffer = ActiveBuffer::Status;
+                app.cursor = 0;
+            } else {
+                app.should_quit = true;
+            }
+        }
+        Action::HideHelp => {
+            if app.buffer == ActiveBuffer::Help {
+                app.buffer = ActiveBuffer::Status;
+            }
+        }
+        Action::MoveDown => app.move_down(),
+        Action::MoveUp => app.move_up(),
+        Action::PageDown => app.move_page_down(half_page(terminal)?),
+        Action::PageUp => app.move_page_up(half_page(terminal)?),
+        Action::StageFile => apply_op(app, PatchOp::Stage, App::stage_at_cursor),
+        Action::UnstageFile => apply_op(app, PatchOp::Unstage, App::unstage_at_cursor),
+        Action::DiscardFile => apply_op(app, PatchOp::Discard, App::discard_at_cursor),
+        Action::StageAll => {
+            let result = app.stage_all();
+            report(app, result);
+        }
+        Action::UnstageAll => {
+            let result = app.unstage_all();
+            report(app, result);
+        }
+        Action::ToggleExpand => app.toggle_expand_at_cursor(),
+        Action::SwitchToLog => match app.load_log() {
+            Ok(()) => {
+                app.buffer = ActiveBuffer::Log;
+                app.set_log_filter(None);
+            }
+            Err(e) => show_error(app, "Error loading log", &e),
+        },
+        Action::Refresh => {
+            if let Err(e) = app.refresh() {
+                show_error(app, "Error refreshing", &e);
+            }
+        }
+        Action::ShowHelp => app.buffer = ActiveBuffer::Help,
+        Action::Enter => open_commit_preview(app),
+        Action::CommitBegin => begin_chord(app, 'c', "c-"),
+        Action::CommitConfirm => open_commit_editor(app, EditorIntent::Commit),
+        Action::CommitAmendConfirm => open_commit_editor(app, EditorIntent::Amend),
+        Action::FixupPick => open_commit_picker(app, FixupMode::Fixup),
+        Action::SquashPick => open_commit_picker(app, FixupMode::Squash),
+        Action::RewordPick => open_commit_picker(app, FixupMode::Reword),
+        Action::PushBegin => begin_chord(app, 'p', "P-"),
+        Action::Push => run_remote(terminal, app, "Pushing…", "Pushed.", "Push failed", |b| b.push())?,
+        Action::PushForce => run_remote(terminal, app, "Force-pushing…", "Force-pushed.", "Force-push failed", |b| b.push_force_lease())?,
+        Action::Pull => run_remote(terminal, app, "Pulling…", "Pulled.", "Pull failed", |b| b.pull())?,
+        Action::VisualMode => {
+            app.visual_anchor = Some(app.cursor);
+            app.status_msg = Some("-- VISUAL --".to_string());
+        }
+        Action::StashBegin => begin_chord(app, 'z', "z-"),
+        Action::StashSave => {
+            let result = app.backend.stash();
+            finish(app, result, "Stashed changes", "Stash failed");
+        }
+        Action::StashPop => {
+            let result = app.backend.stash_pop(0);
+            finish(app, result, "Popped stash", "Stash pop failed");
+        }
+        Action::StashApply => {
+            let result = app.backend.stash_apply(0);
+            finish(app, result, "Applied stash", "Stash apply failed");
+        }
+        Action::StashDrop => {
+            let result = app.backend.stash_drop(0);
+            finish(app, result, "Dropped stash", "Stash drop failed");
+        }
+        Action::StashList => match app.backend.stash_list() {
+            Ok(stashes) if stashes.is_empty() => app.status_msg = Some("No stashes".to_string()),
+            Ok(stashes) => app.stash_list = Some(StashListState { stashes, cursor: 0 }),
+            Err(e) => show_error(app, "Error", &e),
+        },
+        Action::BranchBegin => begin_chord(app, 'b', "b-"),
+        Action::BranchCheckout => open_branch_picker(app, BranchPickerMode::Checkout),
+        Action::BranchDelete => open_branch_picker(app, BranchPickerMode::Delete),
+        Action::BranchCreate => {
+            app.branch_name_input = Some(BranchNameInputState {
+                input: String::new(),
+                mode: BranchNameMode::Create,
+                original: String::new(),
+            });
+        }
+        Action::BranchRename => {
+            let current = app.status.head.clone().unwrap_or_default();
+            app.branch_name_input = Some(BranchNameInputState {
+                input: current.clone(),
+                mode: BranchNameMode::Rename,
+                original: current,
+            });
+        }
+        Action::None => {}
+    }
     Ok(())
+}
+
+fn half_page(terminal: &Term) -> Result<usize> {
+    Ok((terminal.size()?.height as usize / 2).max(1))
+}
+
+/// Stage/unstage/discard: the visual selection if active, else the item under the cursor.
+fn apply_op(app: &mut App, op: PatchOp, at_cursor: fn(&mut App) -> Result<()>) {
+    let result = if app.visual_anchor.is_some() {
+        app.apply_visual_selection(op)
+    } else {
+        at_cursor(app)
+    };
+    report(app, result);
+}
+
+fn begin_chord(app: &mut App, key: char, label: &str) {
+    app.pending_key = Some(KeyCode::Char(key));
+    app.status_msg = Some(label.to_string());
+}
+
+/// Push/pull. Shows `busy` while the (blocking) command runs.
+fn run_remote(
+    terminal: &mut Term,
+    app: &mut App,
+    busy: &str,
+    done: &str,
+    failed: &str,
+    op: impl FnOnce(&dyn Backend) -> Result<()>,
+) -> Result<()> {
+    app.status_msg = Some(busy.to_string());
+    draw(terminal, app)?;
+    let result = op(app.backend.as_ref());
+    // Refresh even on failure: a failed pull can still have changed the worktree.
+    let _ = app.refresh();
+    match result {
+        Ok(()) => app.status_msg = Some(done.to_string()),
+        Err(e) => show_error(app, failed, &e),
+    }
+    Ok(())
+}
+
+fn open_commit_preview(app: &mut App) {
+    let Some(StatusItem::RecentCommit { info }) = app.items.get(app.cursor) else { return };
+    let title = format!("{} {}", info.short_hash, info.summary);
+    match app.backend.show_commit(&info.short_hash) {
+        Ok(content) => app.commit_preview = Some(CommitPreview { title, content, scroll: 0 }),
+        Err(e) => show_error(app, "Error", &e),
+    }
+}
+
+fn open_commit_picker(app: &mut App, mode: FixupMode) {
+    match app.backend.log(app.config.log_limit) {
+        Ok(commits) if commits.is_empty() => {
+            let what = match mode {
+                FixupMode::Fixup => "fixup into",
+                FixupMode::Squash => "squash into",
+                FixupMode::Reword => "reword",
+            };
+            app.status_msg = Some(format!("No commits to {what}"));
+        }
+        Ok(commits) => app.commit_picker = Some(CommitPickerState { commits, cursor: 0, mode }),
+        Err(e) => show_error(app, "Error loading commits", &e),
+    }
+}
+
+fn open_branch_picker(app: &mut App, mode: BranchPickerMode) {
+    match app.backend.list_branches() {
+        Ok(branches) if branches.is_empty() => app.status_msg = Some("No local branches".to_string()),
+        Ok(branches) => {
+            // Start on the current branch to check out, or on another one to delete.
+            let cursor = branches
+                .iter()
+                .position(|b| b.is_current == (mode == BranchPickerMode::Checkout))
+                .unwrap_or(0);
+            app.branch_picker = Some(BranchPickerState { branches, cursor, mode });
+        }
+        Err(e) => show_error(app, "Error", &e),
+    }
+}
+
+/// Open the inline editor for a new commit, or to amend HEAD.
+fn open_commit_editor(app: &mut App, intent: EditorIntent) {
+    let (title, message, prompt, staged_label) = if intent == EditorIntent::Amend {
+        (
+            "Amend Commit",
+            app.backend.head_commit_message().unwrap_or_default(),
+            "Amend the commit message above.",
+            "Staged changes (will be included in amended commit):",
+        )
+    } else {
+        ("Commit Message", String::new(), "Enter commit message above.", "Staged changes:")
+    };
+    let comments = [prompt, "Lines starting with # are ignored.", "", staged_label]
+        .map(String::from)
+        .into_iter()
+        .chain(app.status.staged.iter().map(|e| format!("  {} {}", e.kind, e.path)))
+        .collect();
+    app.open_editor(EditorState::new(title.to_string(), message, comments, intent));
 }
 
 /// Open the inline editor to rewrite an earlier commit's message.
-fn do_reword(app: &mut App, hash: &str, summary: &str) -> Result<()> {
+fn open_reword_editor(app: &mut App, hash: &str, summary: &str) -> Result<()> {
     if !app.status.staged.is_empty() {
         anyhow::bail!("cannot reword while the index has staged changes");
     }
     let message = app.backend.commit_message(hash)?;
-    let comment_lines = vec![
+    let comments = vec![
         format!("Reword {hash} {summary}."),
         "Only the message changes. Later commits are replayed.".to_string(),
         "Staged changes are not included.".to_string(),
         "Lines starting with # are ignored.".to_string(),
     ];
-    app.editor = Some(EditorState::new(
+    app.open_editor(EditorState::new(
         format!("Reword {hash}"),
         message,
-        comment_lines,
+        comments,
         EditorIntent::Reword { hash: hash.to_string() },
     ));
-    app.buffer = ActiveBuffer::Editor;
     Ok(())
 }
 
 /// Handle a keypress when the inline editor buffer is active.
-fn handle_editor_key(app: &mut App, key: crossterm::event::KeyEvent) {
-    use app::EditorMode;
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-    use tui_textarea::CursorMove;
+fn handle_editor_key(app: &mut App, key: KeyEvent) {
+    let Some(state) = app.editor.as_mut() else { return };
 
     // Ctrl-C Ctrl-C (Emacs-style): first press arms, second press saves.
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
-        let fire_save = {
-            let Some(state) = app.editor.as_mut() else { return };
-            if state.pending_ctrl_c {
-                state.pending_ctrl_c = false;
-                true
-            } else {
-                state.pending_ctrl_c = true;
-                false
-            }
-        };
-        if fire_save { editor_do_save(app); }
+        state.pending_ctrl_c = !state.pending_ctrl_c;
+        if !state.pending_ctrl_c {
+            save_editor(app);
+        }
         return;
     }
+    state.pending_ctrl_c = false;
 
-    if let Some(state) = app.editor.as_mut() {
-        state.pending_ctrl_c = false;
-    }
-
-    let (fire_save, fire_abort) = {
-        let Some(state) = app.editor.as_mut() else { return };
-        let mut fire_save = false;
-        let mut fire_abort = false;
-
-        match state.mode {
-            EditorMode::Insert => {
-                if key.code == KeyCode::Esc {
-                    state.mode = EditorMode::Normal;
-                } else {
-                    state.textarea.input(key);
-                }
-            }
-            EditorMode::Normal => {
-                if state.pending_colon {
-                    match key.code {
-                        KeyCode::Char('w') => {} // wait for 'q'
-                        KeyCode::Char('q') => { fire_save = true; }
-                        _ => {}
-                    }
-                    if key.code != KeyCode::Char('w') {
-                        state.pending_colon = false;
-                    }
-                } else if state.pending_d {
-                    state.pending_d = false;
-                    match key.code {
-                        KeyCode::Char('d') => {
-                            // dd: delete entire line
-                            let (row, _) = state.textarea.cursor();
-                            let line_count = state.textarea.lines().len();
-                            state.textarea.move_cursor(CursorMove::Head);
-                            state.textarea.delete_line_by_end();
-                            if row + 1 < line_count {
-                                state.textarea.delete_next_char();
-                            } else if row > 0 {
-                                state.textarea.delete_char();
-                            }
-                        }
-                        KeyCode::Char('w') => {
-                            // dw: delete word forward
-                            state.textarea.delete_next_word();
-                        }
-                        KeyCode::Char('$') => {
-                            // d$: delete to end of line
-                            state.textarea.delete_line_by_end();
-                        }
-                        _ => {} // any other key cancels
-                    }
-                } else if state.pending_g {
-                    state.pending_g = false;
-                    if key.code == KeyCode::Char('g') {
-                        state.textarea.move_cursor(CursorMove::Top);
-                    }
-                } else {
-                    let none = KeyModifiers::NONE;
-                    let ctrl = KeyModifiers::CONTROL;
-                    match key.code {
-                        // Mode transitions
-                        KeyCode::Char('i') => { state.mode = EditorMode::Insert; }
-                        KeyCode::Char('a') => {
-                            state.mode = EditorMode::Insert;
-                            state.textarea.input(KeyEvent::new(KeyCode::Right, none));
-                        }
-                        KeyCode::Char('A') => {
-                            state.mode = EditorMode::Insert;
-                            state.textarea.move_cursor(CursorMove::End);
-                        }
-                        KeyCode::Char('o') => {
-                            state.textarea.move_cursor(CursorMove::End);
-                            state.textarea.insert_newline();
-                            state.mode = EditorMode::Insert;
-                        }
-                        KeyCode::Char('O') => {
-                            state.textarea.move_cursor(CursorMove::Head);
-                            state.textarea.insert_newline();
-                            state.textarea.move_cursor(CursorMove::Up);
-                            state.mode = EditorMode::Insert;
-                        }
-                        // Movements
-                        KeyCode::Char('h') | KeyCode::Left  => { state.textarea.move_cursor(CursorMove::Back); }
-                        KeyCode::Char('l') | KeyCode::Right => { state.textarea.move_cursor(CursorMove::Forward); }
-                        KeyCode::Char('j') | KeyCode::Down  => { state.textarea.move_cursor(CursorMove::Down); }
-                        KeyCode::Char('k') | KeyCode::Up    => { state.textarea.move_cursor(CursorMove::Up); }
-                        KeyCode::Char('w') => { state.textarea.move_cursor(CursorMove::WordForward); }
-                        KeyCode::Char('b') => { state.textarea.move_cursor(CursorMove::WordBack); }
-                        KeyCode::Char('e') => { state.textarea.move_cursor(CursorMove::WordEnd); }
-                        KeyCode::Char('0') => { state.textarea.move_cursor(CursorMove::Head); }
-                        KeyCode::Char('$') => { state.textarea.move_cursor(CursorMove::End); }
-                        KeyCode::Char('G') => { state.textarea.move_cursor(CursorMove::Bottom); }
-                        KeyCode::Char('g') => { state.pending_g = true; }
-                        // Editing
-                        KeyCode::Char('x') => { state.textarea.delete_next_char(); }
-                        KeyCode::Char('d') => { state.pending_d = true; }
-                        KeyCode::Char('u') => { state.textarea.undo(); }
-                        KeyCode::Char('r') if key.modifiers.contains(ctrl) => { state.textarea.redo(); }
-                        // Save / abort
-                        KeyCode::Enter      => { fire_save = true; }
-                        KeyCode::Char('q')  => { fire_abort = true; }
-                        KeyCode::Char(':')  => { state.pending_colon = true; }
-                        _ => {}
-                    }
-                }
+    let mut save = false;
+    let mut abort = false;
+    let textarea = &mut state.textarea;
+    match state.mode {
+        EditorMode::Insert => {
+            if key.code == KeyCode::Esc {
+                state.mode = EditorMode::Normal;
+            } else {
+                textarea.input(key);
             }
         }
+        EditorMode::Normal if state.pending_colon => {
+            match key.code {
+                KeyCode::Char('w') => return, // wait for 'q'
+                KeyCode::Char('q') => save = true,
+                _ => {}
+            }
+            state.pending_colon = false;
+        }
+        EditorMode::Normal if state.pending_d => {
+            state.pending_d = false;
+            match key.code {
+                KeyCode::Char('d') => {
+                    // dd: delete entire line
+                    let (row, _) = textarea.cursor();
+                    let line_count = textarea.lines().len();
+                    textarea.move_cursor(CursorMove::Head);
+                    textarea.delete_line_by_end();
+                    if row + 1 < line_count {
+                        textarea.delete_next_char();
+                    } else if row > 0 {
+                        textarea.delete_char();
+                    }
+                }
+                KeyCode::Char('w') => { textarea.delete_next_word(); } // dw
+                KeyCode::Char('$') => { textarea.delete_line_by_end(); } // d$
+                _ => {} // any other key cancels
+            }
+        }
+        EditorMode::Normal if state.pending_g => {
+            state.pending_g = false;
+            if key.code == KeyCode::Char('g') {
+                textarea.move_cursor(CursorMove::Top);
+            }
+        }
+        EditorMode::Normal => match key.code {
+            // Mode transitions
+            KeyCode::Char('i') => state.mode = EditorMode::Insert,
+            KeyCode::Char('a') => {
+                state.mode = EditorMode::Insert;
+                textarea.move_cursor(CursorMove::Forward);
+            }
+            KeyCode::Char('A') => {
+                state.mode = EditorMode::Insert;
+                textarea.move_cursor(CursorMove::End);
+            }
+            KeyCode::Char('o') => {
+                textarea.move_cursor(CursorMove::End);
+                textarea.insert_newline();
+                state.mode = EditorMode::Insert;
+            }
+            KeyCode::Char('O') => {
+                textarea.move_cursor(CursorMove::Head);
+                textarea.insert_newline();
+                textarea.move_cursor(CursorMove::Up);
+                state.mode = EditorMode::Insert;
+            }
+            // Movements
+            KeyCode::Char('h') | KeyCode::Left => textarea.move_cursor(CursorMove::Back),
+            KeyCode::Char('l') | KeyCode::Right => textarea.move_cursor(CursorMove::Forward),
+            KeyCode::Char('j') | KeyCode::Down => textarea.move_cursor(CursorMove::Down),
+            KeyCode::Char('k') | KeyCode::Up => textarea.move_cursor(CursorMove::Up),
+            KeyCode::Char('w') => textarea.move_cursor(CursorMove::WordForward),
+            KeyCode::Char('b') => textarea.move_cursor(CursorMove::WordBack),
+            KeyCode::Char('e') => textarea.move_cursor(CursorMove::WordEnd),
+            KeyCode::Char('0') => textarea.move_cursor(CursorMove::Head),
+            KeyCode::Char('$') => textarea.move_cursor(CursorMove::End),
+            KeyCode::Char('G') => textarea.move_cursor(CursorMove::Bottom),
+            KeyCode::Char('g') => state.pending_g = true,
+            // Editing
+            KeyCode::Char('x') => { textarea.delete_next_char(); }
+            KeyCode::Char('d') => state.pending_d = true,
+            KeyCode::Char('u') => { textarea.undo(); }
+            KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => { textarea.redo(); }
+            // Save / abort
+            KeyCode::Enter => save = true,
+            KeyCode::Char('q') => abort = true,
+            KeyCode::Char(':') => state.pending_colon = true,
+            _ => {}
+        },
+    }
 
-        (fire_save, fire_abort)
-    };
-
-    if fire_save {
-        editor_do_save(app);
-    } else if fire_abort {
+    if save {
+        save_editor(app);
+    } else if abort {
         app.editor = None;
         app.buffer = ActiveBuffer::Status;
         app.status_msg = Some("Commit aborted".to_string());
     }
 }
 
-fn editor_do_save(app: &mut App) {
-    let (message, intent) = match app.editor.as_ref() {
-        Some(state) => (state.message(), state.intent.clone()),
-        None => return,
-    };
-
-    app.editor = None;
+fn save_editor(app: &mut App) {
+    let Some(state) = app.editor.take() else { return };
     app.buffer = ActiveBuffer::Status;
+    let message = state.message();
+    let intent = state.intent;
 
     if message.is_empty() {
-        app.status_msg = Some(match intent {
-            EditorIntent::Commit => "Commit aborted: empty message".to_string(),
-            EditorIntent::Amend => "Amend aborted: empty message".to_string(),
-            EditorIntent::Reword { .. } => "Reword aborted: empty message".to_string(),
-        });
+        let what = match intent {
+            EditorIntent::Commit => "Commit",
+            EditorIntent::Amend => "Amend",
+            EditorIntent::Reword { .. } => "Reword",
+        };
+        app.status_msg = Some(format!("{what} aborted: empty message"));
         return;
     }
 
@@ -1043,31 +720,10 @@ fn editor_do_save(app: &mut App) {
         EditorIntent::Amend => app.backend.amend(&message),
         EditorIntent::Reword { hash } => app.backend.reword_commit(hash, &message),
     };
-
-    match result {
-        Ok(_) => {
-            let _ = app.refresh();
-            app.status_msg = Some(match intent {
-                EditorIntent::Commit => "Commit created".to_string(),
-                EditorIntent::Amend => "Commit amended".to_string(),
-                EditorIntent::Reword { hash } => format!("Reworded {hash}"),
-            });
-        }
-        Err(e) => {
-            app.status_msg = Some(format!("Error: {}", e));
-        }
-    }
-}
-
-fn get_staged_summary(app: &App) -> Vec<String> {
-    app.status
-        .staged
-        .iter()
-        .map(|e| format!("{} {}", e.kind, e.path))
-        .collect()
-}
-
-
-fn first_line(s: &str) -> &str {
-    s.lines().next().unwrap_or(s)
+    let done = match intent {
+        EditorIntent::Commit => "Commit created".to_string(),
+        EditorIntent::Amend => "Commit amended".to_string(),
+        EditorIntent::Reword { hash } => format!("Reworded {hash}"),
+    };
+    finish(app, result, done, "Error");
 }

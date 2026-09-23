@@ -23,7 +23,7 @@ const SCROLLOFF: usize = 5;
 /// The `[offset, end)` slice of items to build widgets for. Items are one line
 /// each, so the offset is a pure function of the cursor.
 /// Guarantees `offset <= cursor < end` when `height > 0 && cursor < n`.
-fn visible_window(cursor: usize, height: usize, n: usize) -> (usize, usize) {
+pub(super) fn visible_window(cursor: usize, height: usize, n: usize) -> (usize, usize) {
     let offset = (cursor + SCROLLOFF + 1)
         .saturating_sub(height)
         .min(n.saturating_sub(height))
@@ -32,10 +32,8 @@ fn visible_window(cursor: usize, height: usize, n: usize) -> (usize, usize) {
     (offset, end)
 }
 
-pub fn render_status(f: &mut Frame, app: &mut App, area: Rect) {
-    let visual_range = app.visual_anchor.map(|anchor| {
-        if anchor <= app.cursor { (anchor, app.cursor) } else { (app.cursor, anchor) }
-    });
+pub fn render_status(f: &mut Frame, app: &App, area: Rect) {
+    let visual_range = app.visual_range();
 
     let (offset, end) = visible_window(app.cursor, area.height as usize, app.items.len());
 
@@ -45,8 +43,7 @@ pub fn render_status(f: &mut Frame, app: &mut App, area: Rect) {
         .map(|(vis_i, item)| {
             let i = offset + vis_i;
             let in_visual = visual_range
-                .map(|(s, e)| i >= s && i <= e && i != app.cursor)
-                .unwrap_or(false);
+                .is_some_and(|(s, e)| (s..=e).contains(&i) && i != app.cursor);
             status_item_to_list_item(item, in_visual)
         })
         .collect();
@@ -76,18 +73,14 @@ fn status_item_to_list_item(item: &StatusItem, in_visual: bool) -> ListItem<'sta
             count,
             section,
         } => {
-            let color = section_color(section);
+            let color = section_color(*section);
             ListItem::new(Line::from(vec![Span::styled(
                 format!("{} ({})", label, count),
                 Style::new().fg(color).add_modifier(Modifier::BOLD),
             )]))
         }
 
-        StatusItem::File {
-            entry,
-            section: _,
-            is_expanded,
-        } => {
+        StatusItem::File { entry, is_expanded, .. } => {
             let color = kind_color(&entry.kind);
             let kind_str = kind_prefix(&entry.kind);
             let suffix = if *is_expanded { "" } else { "…" };
@@ -101,7 +94,7 @@ fn status_item_to_list_item(item: &StatusItem, in_visual: bool) -> ListItem<'sta
 
         StatusItem::HunkHeader { line, .. } => {
             ListItem::new(Line::from(Span::styled(
-                format!("    {}", line),
+                format!("    {}", &**line),
                 Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
             )))
         }
@@ -116,10 +109,7 @@ fn status_item_to_list_item(item: &StatusItem, in_visual: bool) -> ListItem<'sta
             } else {
                 Style::new().fg(COL_DIM)
             };
-            ListItem::new(Line::from(Span::styled(
-                format!("    {}", line),
-                style,
-            )))
+            ListItem::new(Line::from(Span::styled(format!("    {}", &**line), style)))
         }
 
         StatusItem::UnpushedHeader { count, upstream } => ListItem::new(Line::from(vec![
@@ -168,7 +158,7 @@ fn status_item_to_list_item(item: &StatusItem, in_visual: bool) -> ListItem<'sta
     }
 }
 
-fn section_color(section: &Section) -> Color {
+fn section_color(section: Section) -> Color {
     match section {
         Section::Staged => COL_STAGED,
         Section::Unstaged => COL_UNSTAGED,
@@ -203,7 +193,7 @@ fn kind_prefix(kind: &FileKind) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{render_status, visible_window, SCROLLOFF};
-    use crate::app::App;
+    use crate::app::{App, Section};
     use crate::backend::{Backend, CommitInfo, FileEntry, FileKind, RepoStatus, StashInfo};
     use crate::config::Config;
     use anyhow::{bail, Result};
@@ -240,9 +230,9 @@ mod tests {
             head_commit_message() -> Result<String>;
             commit_message(&str) -> Result<String>;
             reword_commit(&str, &str) -> Result<()>;
-            push() -> Result<String>;
-            push_force_lease() -> Result<String>;
-            pull() -> Result<String>;
+            push() -> Result<()>;
+            push_force_lease() -> Result<()>;
+            pull() -> Result<()>;
             show_commit(&str) -> Result<String>;
             apply_patch(&str, bool) -> Result<()>;
             discard_patch(&str) -> Result<()>;
@@ -253,7 +243,7 @@ mod tests {
             fixup_commit(&str) -> Result<()>;
             squash_commit(&str) -> Result<()>;
             stash() -> Result<()>;
-            stash_pop() -> Result<()>;
+            stash_pop(usize) -> Result<()>;
             stash_apply(usize) -> Result<()>;
             stash_drop(usize) -> Result<()>;
             list_branches() -> Result<Vec<crate::backend::BranchInfo>>;
@@ -276,8 +266,9 @@ mod tests {
         for i in 0..diff_lines {
             diff.push_str(&format!("+changed line {}\n", i));
         }
-        app.diff_cache.insert("unstaged:big.txt".into(), diff);
-        app.expanded.insert("unstaged:big.txt".into());
+        let key = (Section::Unstaged, "big.txt".to_string());
+        app.diff_cache.insert(key.clone(), diff.into());
+        app.expanded.insert(key);
         app.rebuild_items();
         app
     }
@@ -294,7 +285,7 @@ mod tests {
             for cursor in 0..n {
                 app.cursor = cursor;
                 terminal
-                    .draw(|f| render_status(f, &mut app, Rect::new(0, 0, 100, height)))
+                    .draw(|f| render_status(f, &app, Rect::new(0, 0, 100, height)))
                     .unwrap();
             }
         }
@@ -308,7 +299,7 @@ mod tests {
         for &cursor in &[0usize, 1, 50, 500, 1500, app.items.len() - 1] {
             app.cursor = cursor;
             terminal
-                .draw(|f| render_status(f, &mut app, Rect::new(0, 0, 100, 24)))
+                .draw(|f| render_status(f, &app, Rect::new(0, 0, 100, 24)))
                 .unwrap();
 
             let (offset, _) = visible_window(cursor, 24, app.items.len());
@@ -326,10 +317,10 @@ mod tests {
     #[test]
     fn renders_empty_list() {
         let backend = Box::new(MockBackend { status: RepoStatus::default() });
-        let mut app = App::new(backend, Config::default()).unwrap();
+        let app = App::new(backend, Config::default()).unwrap();
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
         terminal
-            .draw(|f| render_status(f, &mut app, Rect::new(0, 0, 80, 24)))
+            .draw(|f| render_status(f, &app, Rect::new(0, 0, 80, 24)))
             .unwrap();
     }
 
