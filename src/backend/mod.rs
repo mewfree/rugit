@@ -106,6 +106,8 @@ pub trait Backend {
     fn discard_all_staged(&self) -> Result<()>;
     fn fixup_commit(&self, hash: &str) -> Result<()>;
     fn squash_commit(&self, hash: &str) -> Result<()>;
+    /// Remove `hash` from history and replay the commits after it.
+    fn drop_commit(&self, hash: &str) -> Result<()>;
     fn stash(&self) -> Result<()>;
     fn stash_pop(&self, index: usize) -> Result<()>;
     fn stash_apply(&self, index: usize) -> Result<()>;

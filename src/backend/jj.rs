@@ -152,6 +152,11 @@ impl Backend for JjBackend {
         bail!("squash not supported for jj backend")
     }
 
+    fn drop_commit(&self, hash: &str) -> Result<()> {
+        self.run_jj(&["abandon", hash])?;
+        Ok(())
+    }
+
     fn stash(&self) -> Result<()> {
         bail!("stash not supported for jj backend")
     }

@@ -242,6 +242,7 @@ mod tests {
             discard_all_staged() -> Result<()>;
             fixup_commit(&str) -> Result<()>;
             squash_commit(&str) -> Result<()>;
+            drop_commit(&str) -> Result<()>;
             stash() -> Result<()>;
             stash_pop(usize) -> Result<()>;
             stash_apply(usize) -> Result<()>;

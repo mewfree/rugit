@@ -151,6 +151,13 @@ impl GitBackend {
         Ok(())
     }
 
+    /// Staged or unstaged changes to tracked files. Untracked files don't count.
+    fn has_uncommitted_changes(&self) -> Result<bool> {
+        let mut opts = StatusOptions::new();
+        opts.include_untracked(false).include_ignored(false);
+        Ok(!self.repo.statuses(Some(&mut opts))?.is_empty())
+    }
+
     /// Cap on unpushed commits we parse. The walk still counts them all.
     const UNPUSHED_DISPLAY_LIMIT: usize = 100;
 
@@ -485,6 +492,26 @@ impl Backend for GitBackend {
         self.autosquash_rebase(hash)
     }
 
+    fn drop_commit(&self, hash: &str) -> Result<()> {
+        // No --autostash: re-applying uncommitted changes after the drop can
+        // conflict, and git reports that as success. Make the user stash first.
+        if self.has_uncommitted_changes()? {
+            bail!("cannot drop a commit with uncommitted changes; commit or stash them first (z z)");
+        }
+        let commit = self.find_commit(hash)?;
+        if commit.parent_count() == 0 {
+            bail!("cannot drop the root commit");
+        }
+        let full = commit.id().to_string();
+        let parent = format!("{full}^");
+        if let Err(e) = self.run_git(&["rebase", "--onto", &parent, &full]) {
+            // Don't leave the repo mid-rebase (e.g. on a conflict).
+            let _ = self.run_git(&["rebase", "--abort"]);
+            bail!("rebase failed (conflict?); aborted. {e}");
+        }
+        Ok(())
+    }
+
     fn show_commit(&self, hash: &str) -> Result<String> {
         let out = self.run_git(&["show", "--stat", "-p", "--color=never", hash])?;
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
@@ -767,6 +794,82 @@ pub(crate) mod tests {
         assert_eq!(fs::read_to_string(repo.path.join("a")).unwrap(), "dirty\n");
         assert_eq!(repo.stdout(&["status", "--porcelain"]).trim_end(), " M a");
         assert!(repo.stdout(&["stash", "list"]).trim().is_empty());
+    }
+
+    #[test]
+    fn drop_removes_commit_and_replays_later_ones() {
+        let repo = TestRepo::new();
+        repo.commit("a", "a\n", "first");
+        repo.commit("b", "b\n", "second");
+        repo.commit("c", "c\n", "third");
+        fs::write(repo.path.join("untracked"), "u\n").unwrap();
+
+        repo.backend().drop_commit("HEAD~1").unwrap();
+
+        assert_eq!(repo.log_subjects(), vec!["third", "first"]);
+        assert!(!repo.path.join("b").exists());
+        assert_eq!(repo.stdout(&["status", "--porcelain"]).trim_end(), "?? untracked");
+    }
+
+    #[test]
+    fn drop_head_commit() {
+        let repo = TestRepo::new();
+        repo.commit("a", "a\n", "first");
+        repo.commit("b", "b\n", "second");
+
+        repo.backend().drop_commit("HEAD").unwrap();
+
+        assert_eq!(repo.log_subjects(), vec!["first"]);
+        assert!(!repo.path.join("b").exists());
+    }
+
+    #[test]
+    fn drop_refuses_root_commit() {
+        let repo = TestRepo::new();
+        repo.commit("a", "a\n", "first");
+        repo.commit("b", "b\n", "second");
+        let backend = repo.backend();
+
+        let err = backend.drop_commit("HEAD~1").unwrap_err().to_string();
+        assert!(err.contains("root"), "{err}");
+        assert_eq!(repo.log_subjects(), vec!["second", "first"]);
+    }
+
+    #[test]
+    fn drop_aborts_on_conflict() {
+        let repo = TestRepo::new();
+        repo.commit("f", "1\n", "base");
+        repo.commit("f", "2\n", "change");
+        repo.commit("f", "3\n", "depends on change");
+        let head = repo.head();
+
+        let err = repo.backend().drop_commit("HEAD~1").unwrap_err().to_string();
+
+        assert!(err.contains("aborted"), "{err}");
+        assert_eq!(repo.head(), head);
+        assert!(repo.stdout(&["status", "--porcelain"]).trim().is_empty());
+    }
+
+    #[test]
+    fn drop_refuses_uncommitted_changes() {
+        let repo = TestRepo::new();
+        repo.commit("f", "1\n", "base");
+        repo.commit("f", "2\n", "change");
+        repo.commit("g", "g\n", "other");
+        let head = repo.head();
+        let backend = repo.backend();
+
+        fs::write(repo.path.join("f"), "dirty\n").unwrap();
+        let err = backend.drop_commit("HEAD~1").unwrap_err().to_string();
+        assert!(err.contains("uncommitted"), "{err}");
+        assert_eq!(repo.head(), head);
+        assert_eq!(repo.stdout(&["status", "--porcelain"]).trim_end(), " M f");
+
+        repo.git(&["add", "f"]);
+        let err = backend.drop_commit("HEAD~1").unwrap_err().to_string();
+        assert!(err.contains("uncommitted"), "{err}");
+        assert_eq!(repo.head(), head);
+        assert_eq!(repo.stdout(&["status", "--porcelain"]).trim_end(), "M  f");
     }
 
     #[test]

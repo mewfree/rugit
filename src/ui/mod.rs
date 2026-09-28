@@ -63,6 +63,7 @@ pub fn render(f: &mut Frame, app: &App) {
         Some(KeyCode::Char('p')) => popup::render_push_popup(f, area),
         Some(KeyCode::Char('z')) => popup::render_stash_popup(f, area),
         Some(KeyCode::Char('b')) => popup::render_branch_popup(f, area),
+        Some(KeyCode::Char('r')) => popup::render_rebase_popup(f, area),
         _ => {}
     }
 

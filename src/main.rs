@@ -342,6 +342,10 @@ fn handle_commit_picker_key(app: &mut App, code: KeyCode) {
                     let result = app.backend.squash_commit(hash);
                     finish(app, result, format!("Squashed into {hash}"), "Error");
                 }
+                FixupMode::Drop => {
+                    let result = app.backend.drop_commit(hash);
+                    finish(app, result, format!("Dropped {hash}"), "Drop failed");
+                }
             }
         }
         _ => {}
@@ -411,6 +415,8 @@ fn handle_action(terminal: &mut Term, app: &mut App, action: Action) -> Result<(
         Action::FixupPick => open_commit_picker(app, FixupMode::Fixup),
         Action::SquashPick => open_commit_picker(app, FixupMode::Squash),
         Action::RewordPick => open_commit_picker(app, FixupMode::Reword),
+        Action::RebaseBegin => begin_chord(app, 'r', "r-"),
+        Action::DropPick => open_commit_picker(app, FixupMode::Drop),
         Action::PushBegin => begin_chord(app, 'p', "P-"),
         Action::Push => run_remote(terminal, app, "Pushing…", "Pushed.", "Push failed", |b| b.push())?,
         Action::PushForce => run_remote(terminal, app, "Force-pushing…", "Force-pushed.", "Force-push failed", |b| b.push_force_lease())?,
@@ -520,6 +526,7 @@ fn open_commit_picker(app: &mut App, mode: FixupMode) {
                 FixupMode::Fixup => "fixup into",
                 FixupMode::Squash => "squash into",
                 FixupMode::Reword => "reword",
+                FixupMode::Drop => "drop",
             };
             app.status_msg = Some(format!("No commits to {what}"));
         }

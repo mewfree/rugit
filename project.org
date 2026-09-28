@@ -20,6 +20,9 @@ Magit-style: pick a commit from a list, create a fixup or squash commit targetin
 ** DONE Instant reword (=c w=)
 Pick a commit, edit its message, and replay later commits onto it. Uses =git commit --fixup=reword:= plus the existing autosquash rebase. Refuses a dirty index, and drops the temporary =amend!= commit if the rebase fails.
 
+** DONE Remove a commit (=r k=)
+Magit-style: pick a commit and drop it from history, replaying later commits (=git rebase --onto <hash>^ <hash>=). Refuses the root commit and any uncommitted changes to tracked files (no autostash: a conflicting re-apply is reported by git as success), and aborts the rebase on conflict. jj backend uses =jj abandon=.
+
 ** TODO Diff viewer buffer (=d= on a commit or file)
 Full-screen diff view, navigable by hunk. Invoked from log buffer (=d= on selected commit) or status buffer (=d= on a file). Syntax-highlighted diff lines.
 

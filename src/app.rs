@@ -23,6 +23,7 @@ pub enum FixupMode {
     Fixup,
     Squash,
     Reword,
+    Drop,
 }
 
 /// What saving the commit editor should do.

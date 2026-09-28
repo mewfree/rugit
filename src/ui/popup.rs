@@ -112,6 +112,7 @@ pub fn render_help(f: &mut Frame, area: Rect) {
         key("  c F         ", "Instant fixup into a commit"),
         key("  c s         ", "Instant squash into a commit"),
         key("  c w         ", "Reword a commit's message"),
+        key("  r k         ", "Remove a commit"),
         Line::from(""),
         section("  Stash"),
         key("  z           ", "Open stash menu"),
@@ -180,6 +181,7 @@ pub fn render_commit_picker(f: &mut Frame, area: Rect, state: &CommitPickerState
         FixupMode::Fixup  => " Fixup: select target commit ",
         FixupMode::Squash => " Squash: select target commit ",
         FixupMode::Reword => " Reword: select target commit ",
+        FixupMode::Drop   => " Drop: select commit to remove ",
     };
     let size = (70, 60);
     let lines = list_lines(
@@ -211,6 +213,12 @@ pub fn render_commit_popup(f: &mut Frame, area: Rect) {
         ("F", "Instant fixup"),
         ("s", "Instant squash"),
         ("w", "Reword message"),
+    ]);
+}
+
+pub fn render_rebase_popup(f: &mut Frame, area: Rect) {
+    render_menu(f, area, 30, "Rebase", Color::Red, &[
+        ("k", "Remove a commit"),
     ]);
 }
 

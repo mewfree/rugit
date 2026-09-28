@@ -20,6 +20,8 @@ pub enum Action {
     FixupPick,    // 'c F' — open commit picker for fixup
     SquashPick,   // 'c s' — open commit picker for squash
     RewordPick,   // 'c w' — open commit picker to reword a message
+    RebaseBegin,  // 'r' — opens rebase submenu
+    DropPick,     // 'r k' — open commit picker to remove a commit
     Enter,
     PushBegin,    // 'P' — opens push submenu
     Push,         // 'P p'
@@ -55,7 +57,7 @@ pub fn key_to_action(key: KeyEvent, pending: Option<KeyCode>) -> Action {
     }
 
     // Second key of a chord; anything unrecognised cancels it.
-    if let Some(KeyCode::Char(prefix @ ('c' | 'p' | 'z' | 'b'))) = pending {
+    if let Some(KeyCode::Char(prefix @ ('c' | 'p' | 'z' | 'b' | 'r'))) = pending {
         let KeyCode::Char(second) = key.code else { return Action::None };
         return match (prefix, second) {
             ('c', 'c') => Action::CommitConfirm,
@@ -63,6 +65,7 @@ pub fn key_to_action(key: KeyEvent, pending: Option<KeyCode>) -> Action {
             ('c', 'F') => Action::FixupPick,
             ('c', 's') => Action::SquashPick,
             ('c', 'w') => Action::RewordPick,
+            ('r', 'k') => Action::DropPick,
             ('p', 'p') => Action::Push,
             ('p', 'f') => Action::PushForce,
             ('z', 'z') => Action::StashSave,
@@ -99,6 +102,7 @@ pub fn key_to_action(key: KeyEvent, pending: Option<KeyCode>) -> Action {
         KeyCode::Char('x') => Action::DiscardFile,
         KeyCode::Char('V') => Action::VisualMode,
         KeyCode::Char('z') => Action::StashBegin,
+        KeyCode::Char('r') => Action::RebaseBegin,
         _ => Action::None,
     }
 }
