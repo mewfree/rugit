@@ -665,7 +665,7 @@ fn handle_editor_key(app: &mut App, key: KeyEvent) {
                 }
                 state.mode = EditorMode::Normal;
             }
-            KeyCode::Char('d') | KeyCode::Char('x') => {
+            KeyCode::Char('d' | 'x') => {
                 select_inclusive(textarea);
                 textarea.cut();
                 state.yank_linewise = false;
@@ -693,7 +693,7 @@ fn handle_editor_key(app: &mut App, key: KeyEvent) {
                     state.yank_linewise = true;
                     state.mode = EditorMode::Normal;
                 }
-                KeyCode::Char('d') | KeyCode::Char('x') => {
+                KeyCode::Char('d' | 'x') => {
                     delete_lines(textarea, first, last);
                     state.yank_linewise = true;
                     state.mode = EditorMode::Normal;

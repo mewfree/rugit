@@ -22,7 +22,7 @@ impl std::fmt::Display for FileKind {
             FileKind::Modified => write!(f, "modified"),
             FileKind::Added => write!(f, "added"),
             FileKind::Deleted => write!(f, "deleted"),
-            FileKind::Renamed(to) => write!(f, "renamed → {}", to),
+            FileKind::Renamed(to) => write!(f, "renamed → {to}"),
             FileKind::Untracked => write!(f, "untracked"),
             FileKind::Conflicted => write!(f, "conflicted"),
         }

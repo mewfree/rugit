@@ -469,11 +469,7 @@ impl App {
                     self.cursor = next;
                 }
             }
-            ActiveBuffer::Log => {
-                if self.cursor + 1 < self.log_visible_len() {
-                    self.cursor += 1;
-                }
-            }
+            ActiveBuffer::Log if self.cursor + 1 < self.log_visible_len() => self.cursor += 1,
             _ => {}
         }
     }

@@ -60,6 +60,11 @@ status sections; shared popup menu/picker rendering; split =run_app=; stop
 cloning diffs and status items per keypress/frame. Also: =#[serde(default)]= so a
 partial =config.toml= no longer silently drops every setting.
 
+** DONE Clippy tidy pass
+Collapsed a redundant =if= into a match guard, =map_or= / =str::to_string= in place of
+closures, inlined format args, nested or-patterns, and =writeln!= instead of
+=push_str(&format!(..))= when building hunk patches.
+
 ** DONE Performance pass (idle redraws, windowed status render, batched staging, fewer git walks)
 Windowed status rendering so per-frame work scales with the viewport rather than
 the item count; redraw only after an event instead of 4x/second while idle;

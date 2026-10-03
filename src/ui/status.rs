@@ -75,7 +75,7 @@ fn status_item_to_list_item(item: &StatusItem, in_visual: bool) -> ListItem<'sta
         } => {
             let color = section_color(*section);
             ListItem::new(Line::from(vec![Span::styled(
-                format!("{} ({})", label, count),
+                format!("{label} ({count})"),
                 Style::new().fg(color).add_modifier(Modifier::BOLD),
             )]))
         }
@@ -86,7 +86,7 @@ fn status_item_to_list_item(item: &StatusItem, in_visual: bool) -> ListItem<'sta
             let suffix = if *is_expanded { "" } else { "…" };
             ListItem::new(Line::from(vec![
                 Span::raw("  "),
-                Span::styled(format!("{} ", kind_str), Style::new().fg(color)),
+                Span::styled(format!("{kind_str} "), Style::new().fg(color)),
                 Span::raw(entry.path.clone()),
                 Span::styled(suffix, Style::new().fg(COL_DIM)),
             ]))
@@ -115,7 +115,7 @@ fn status_item_to_list_item(item: &StatusItem, in_visual: bool) -> ListItem<'sta
         StatusItem::UnpushedHeader { count, upstream } => ListItem::new(Line::from(vec![
             Span::raw(" "),
             Span::styled(
-                format!("Unpushed to {} ({})", upstream, count),
+                format!("Unpushed to {upstream} ({count})"),
                 Style::new().fg(Color::Magenta).add_modifier(Modifier::BOLD),
             ),
         ])),
@@ -131,7 +131,7 @@ fn status_item_to_list_item(item: &StatusItem, in_visual: bool) -> ListItem<'sta
         StatusItem::StashHeader { count } => ListItem::new(Line::from(vec![
             Span::raw(" "),
             Span::styled(
-                format!("Stashes ({})", count),
+                format!("Stashes ({count})"),
                 Style::new().fg(Color::Magenta).add_modifier(Modifier::BOLD),
             ),
         ])),

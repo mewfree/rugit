@@ -71,7 +71,7 @@ pub fn render_editor(f: &mut Frame, area: Rect, state: &EditorState) {
     if comments_height > 0 {
         let comment_lines: Vec<Line> = std::iter::once(Line::from(""))
             .chain(state.comments.iter().map(|c| Line::from(Span::styled(
-                format!("# {}", c),
+                format!("# {c}"),
                 Style::new().fg(Color::DarkGray),
             ))))
             .collect();

@@ -1,6 +1,7 @@
 //! Cutting unified diffs into patches `git apply` accepts.
 
 use std::collections::HashSet;
+use std::fmt::Write as _;
 
 /// A diff split into lines, with the index of each `@@` hunk header.
 struct Hunks<'a> {
@@ -111,11 +112,7 @@ pub fn lines_patch(
     };
     let mut patch = String::new();
     push_lines(&mut patch, hunks.file_header());
-    patch.push_str(&format!(
-        "@@ -{old_start},{} +{new_start},{} @@\n",
-        count('-'),
-        count('+')
-    ));
+    let _ = writeln!(patch, "@@ -{old_start},{} +{new_start},{} @@", count('-'), count('+'));
     push_lines(&mut patch, &new_body);
     Some(patch)
 }
