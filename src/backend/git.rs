@@ -82,8 +82,7 @@ impl GitBackend {
         // `--root` instead of `<hash>^`.
         let has_parent = self
             .find_commit(hash)
-            .map(|c| c.parent_count() > 0)
-            .unwrap_or(true);
+            .map_or(true, |c| c.parent_count() > 0);
         let base = if has_parent {
             format!("{hash}^")
         } else {
@@ -667,7 +666,7 @@ pub(crate) mod tests {
         fn log_subjects(&self) -> Vec<String> {
             self.stdout(&["log", "--format=%s"])
                 .lines()
-                .map(|s| s.to_string())
+                .map(str::to_string)
                 .collect()
         }
 

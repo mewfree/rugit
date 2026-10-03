@@ -49,7 +49,7 @@ pub fn key_to_action(key: KeyEvent, pending: Option<KeyCode>) -> Action {
     // Handle ctrl-c / ctrl-q / ctrl-d / ctrl-u
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         match key.code {
-            KeyCode::Char('c') | KeyCode::Char('q') => return Action::Quit,
+            KeyCode::Char('c' | 'q') => return Action::Quit,
             KeyCode::Char('d') => return Action::PageDown,
             KeyCode::Char('u') => return Action::PageUp,
             _ => {}
