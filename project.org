@@ -52,6 +52,9 @@ Implement all Backend trait methods using =jj= subprocess calls.
 
 * Done
 
+** DONE Makefile for common commands
+Targets for install, run, test and lint (clippy); =make= alone prints the help.
+
 ** DONE Cleanup pass (dead code, dedup, allocation cuts)
 Remove dead code (=Config.editor=, unused push/pull output, clippy warnings);
 =run_git=/=pipe_git= helpers in the git backend; one =diff= module for hunk/line
