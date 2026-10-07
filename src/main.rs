@@ -644,6 +644,17 @@ fn handle_editor_key(app: &mut App, key: KeyEvent) {
                 _ => {} // any other key cancels
             }
         }
+        EditorMode::Normal if state.pending_y => {
+            state.pending_y = false;
+            if key.code == KeyCode::Char('y') {
+                // yy: yank the current line
+                let (row, col) = textarea.cursor();
+                let text = textarea.lines()[row].clone() + "\n";
+                textarea.set_yank_text(text);
+                textarea.move_cursor(CursorMove::Jump(row as u16, col as u16));
+                state.yank_linewise = true;
+            }
+        }
         EditorMode::Normal | EditorMode::Visual | EditorMode::VisualLine if state.pending_g => {
             state.pending_g = false;
             if key.code == KeyCode::Char('g') {
@@ -745,6 +756,7 @@ fn handle_editor_key(app: &mut App, key: KeyEvent) {
             // Editing
             KeyCode::Char('x') => { textarea.delete_next_char(); }
             KeyCode::Char('d') => state.pending_d = true,
+            KeyCode::Char('y') => state.pending_y = true,
             KeyCode::Char('u') => { textarea.undo(); }
             KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => { textarea.redo(); }
             // Save / abort

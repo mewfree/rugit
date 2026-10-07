@@ -106,6 +106,7 @@ pub struct EditorState {
     pub pending_colon: bool,
     pub pending_ctrl_c: bool,
     pub pending_d: bool,
+    pub pending_y: bool,
     pub pending_g: bool,
     /// Row where linewise visual mode (`V`) started.
     pub visual_line_anchor: usize,
@@ -144,6 +145,7 @@ impl EditorState {
             pending_colon: false,
             pending_ctrl_c: false,
             pending_d: false,
+            pending_y: false,
             pending_g: false,
             visual_line_anchor: 0,
             yank_linewise: false,
