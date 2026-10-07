@@ -169,9 +169,13 @@ pub fn render_commit_preview(f: &mut Frame, area: Rect, preview: &CommitPreview)
     lines.push(Line::from(""));
     lines.push(hint("  q / Esc to close"));
 
+    let viewport = popup_area.height.saturating_sub(2) as usize;
+    let max_scroll = lines.len().saturating_sub(viewport).min(u16::MAX as usize) as u16;
+    preview.max_scroll.set(max_scroll);
+
     let paragraph = Paragraph::new(lines)
         .block(popup_block(format!(" {} ", preview.title), Color::Yellow))
-        .scroll((preview.scroll, 0));
+        .scroll((preview.scroll.min(max_scroll), 0));
 
     f.render_widget(paragraph, popup_area);
 }

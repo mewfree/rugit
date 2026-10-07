@@ -74,11 +74,17 @@ pub struct CommitPreview {
     pub title: String,
     pub content: String,
     pub scroll: u16,
+    /// Furthest useful scroll offset; updated by the renderer once it knows the viewport height.
+    pub max_scroll: std::cell::Cell<u16>,
 }
 
 impl CommitPreview {
+    pub fn new(title: String, content: String) -> Self {
+        Self { title, content, scroll: 0, max_scroll: std::cell::Cell::new(u16::MAX) }
+    }
+
     pub fn scroll_by(&mut self, lines: i16) {
-        self.scroll = self.scroll.saturating_add_signed(lines);
+        self.scroll = self.scroll.saturating_add_signed(lines).min(self.max_scroll.get());
     }
 }
 

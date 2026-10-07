@@ -514,7 +514,7 @@ fn open_commit_preview(app: &mut App) {
     let Some(StatusItem::RecentCommit { info }) = app.items.get(app.cursor) else { return };
     let title = format!("{} {}", info.short_hash, info.summary);
     match app.backend.show_commit(&info.short_hash) {
-        Ok(content) => app.commit_preview = Some(CommitPreview { title, content, scroll: 0 }),
+        Ok(content) => app.commit_preview = Some(CommitPreview::new(title, content)),
         Err(e) => show_error(app, "Error", &e),
     }
 }
