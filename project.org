@@ -14,10 +14,10 @@ Magit-style transient: =b b= checkout, =b c= create+checkout, =b d= delete, =b r
 ** TODO Interactive rebase UI (=r i=)
 Show rebase todo list (pick/reword/edit/squash/fixup/drop per commit). Arrow keys to reorder, keybinds to change action. Drives =git rebase -i= via a custom sequence editor.
 
-** DONE Instant fixup/squash (=c F= / =c s=)
+** DONE Instant fixup/squash (=c F= / =c S=)
 Magit-style: pick a commit from a list, create a fixup or squash commit targeting it, optionally auto-rebase immediately.
 
-** DONE Instant reword (=c w=)
+** DONE Instant reword (=r w=)
 Pick a commit, edit its message, and replay later commits onto it. Uses =git commit --fixup=reword:= plus the existing autosquash rebase. Refuses a dirty index, and drops the temporary =amend!= commit if the rebase fails.
 
 ** DONE Remove a commit (=r k=)

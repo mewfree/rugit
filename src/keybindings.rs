@@ -18,9 +18,9 @@ pub enum Action {
     CommitConfirm, // second 'c'
     CommitAmendConfirm, // 'a' after 'c'
     FixupPick,    // 'c F' — open commit picker for fixup
-    SquashPick,   // 'c s' — open commit picker for squash
-    RewordPick,   // 'c w' — open commit picker to reword a message
+    SquashPick,   // 'c S' — open commit picker for squash
     RebaseBegin,  // 'r' — opens rebase submenu
+    RewordPick,   // 'r w' — open commit picker to reword a message
     DropPick,     // 'r k' — open commit picker to remove a commit
     Enter,
     PushBegin,    // 'P' — opens push submenu
@@ -63,8 +63,8 @@ pub fn key_to_action(key: KeyEvent, pending: Option<KeyCode>) -> Action {
             ('c', 'c') => Action::CommitConfirm,
             ('c', 'a') => Action::CommitAmendConfirm,
             ('c', 'F') => Action::FixupPick,
-            ('c', 's') => Action::SquashPick,
-            ('c', 'w') => Action::RewordPick,
+            ('c', 'S') => Action::SquashPick,
+            ('r', 'w') => Action::RewordPick,
             ('r', 'k') => Action::DropPick,
             ('p', 'p') => Action::Push,
             ('p', 'f') => Action::PushForce,
