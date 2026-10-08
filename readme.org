@@ -51,45 +51,86 @@ or two keystrokes away.
 
 * Key bindings
 
-** Global
+Keys are chords where noted: press the first key to open a menu, then the second key to run the action.
 
-| Key       | Action                  |
-|-----------+-------------------------|
-| =?=       | Show key binding help   |
-| =q=       | Quit                    |
-| =g=       | Refresh status          |
-| =Tab=     | Expand / collapse diff  |
-| =j= / =k= | Move down / up          |
-| =l=       | Open log buffer         |
-| =b=       | Return to status buffer |
+** Navigation
 
-** Status buffer
+| Key             | Action                              |
+|-----------------+-------------------------------------|
+| =j= / =↓=       | Move down                           |
+| =k= / =↑=       | Move up                             |
+| =Tab=           | Expand / collapse diff              |
+| =Enter=         | Preview commit at point             |
+| =Ctrl-d= / =Ctrl-u= | Page down / up                  |
+| =l=             | Open log buffer                     |
+| =g=             | Refresh                             |
+| =?=             | Show key binding help               |
+| =Esc=           | Close help                          |
+| =q=             | Quit (or close help / log view)     |
 
-| Key     | Action                               |
-|---------+--------------------------------------|
-| =s=     | Stage file, hunk, or line at point   |
-| =u=     | Unstage file, hunk, or line          |
-| =V=     | Enter visual mode (multi-line select) |
-| =S=     | Stage all unstaged changes           |
-| =U=     | Unstage all staged changes           |
-| =x=     | Discard file or hunk at point        |
-| =c=     | Open commit menu                     |
-| =c c=   | Commit staged changes                |
-| =c a=   | Amend last commit                    |
-| =r w=   | Reword a commit's message            |
-| =p=     | Open push menu                       |
-| =p p=   | Push to upstream                     |
-| =p f=   | Force-push (with-lease)              |
-| =F=     | Pull from upstream                   |
-| =Enter= | Preview commit at point              |
+** Staging
+
+| Key | Action                                  |
+|-----+-----------------------------------------|
+| =s= | Stage file or hunk at point             |
+| =u= | Unstage file or hunk at point           |
+| =x= | Discard changes at point                |
+| =S= | Stage all changes                       |
+| =U= | Unstage all changes                     |
+| =V= | Visual mode (select a range of lines)   |
+
+** Commits (=c=)
+
+| Key   | Action                                  |
+|-------+-----------------------------------------|
+| =c c= | Commit staged changes                   |
+| =c a= | Amend last commit                       |
+| =c F= | Instant fixup into a commit             |
+| =c S= | Instant squash into a commit            |
+
+** Rebase (=r=)
+
+| Key   | Action                                  |
+|-------+-----------------------------------------|
+| =r w= | Reword a commit's message               |
+| =r k= | Remove a commit                         |
+
+** Stash (=z=)
+
+| Key   | Action                                  |
+|-------+-----------------------------------------|
+| =z z= | Stash changes                           |
+| =z p= | Pop latest stash                        |
+| =z a= | Apply latest stash                      |
+| =z d= | Drop latest stash                       |
+| =z l= | List stashes                            |
+
+** Remotes
+
+| Key   | Action                                  |
+|-------+-----------------------------------------|
+| =p p= | Push to upstream                        |
+| =p f= | Force-push (with-lease)                 |
+| =F=   | Pull from upstream                      |
+
+** Branches (=b=)
+
+| Key   | Action                                  |
+|-------+-----------------------------------------|
+| =b b= | Checkout branch                         |
+| =b c= | Create and checkout new branch          |
+| =b d= | Delete branch                           |
+| =b r= | Rename current branch                   |
 
 ** Log buffer
 
-| Key       | Action           |
-|-----------+------------------|
-| =j= / =k= | Move down / up   |
-| =Enter=   | Preview commit   |
-| =b=       | Return to status |
+| Key           | Action                                  |
+|---------------+-----------------------------------------|
+| =j= / =k=     | Move down / up                          |
+| =Enter=       | Preview commit                          |
+| =/=           | Filter by hash, author, or message      |
+| =Esc=         | Clear filter                            |
+| =q=           | Return to status                        |
 
 * Jujutsu support
 
