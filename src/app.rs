@@ -2,11 +2,12 @@ use std::collections::{HashMap, HashSet};
 use std::ops::{Deref, Range};
 use std::path::Path;
 use std::rc::Rc;
+use std::time::{Duration, Instant, SystemTime};
 use anyhow::Result;
 use crossterm::event::KeyCode;
 use tui_textarea::TextArea;
 
-use crate::backend::{Backend, BranchInfo, CommitInfo, FileEntry, RepoStatus, StashInfo};
+use crate::backend::{Backend, BranchInfo, CommitInfo, FileEntry, FileKind, RepoStatus, StashInfo};
 use crate::config::Config;
 use crate::diff;
 
@@ -179,6 +180,13 @@ impl Section {
 /// Key for a file's expanded state and cached diff.
 pub type FileKey = (Section, String);
 
+/// What identifies a file's state in the status list: its kind plus the
+/// worktree file's mtime and size, so an edit to an already-modified file shows.
+type Fingerprint = (FileKind, Option<(SystemTime, u64)>);
+
+/// How long a file touched outside rugit stays highlighted.
+const HIGHLIGHT_FOR: Duration = Duration::from_millis(1500);
+
 fn file_key(section: Section, path: &str) -> FileKey {
     (section, path.to_string())
 }
@@ -313,6 +321,10 @@ pub struct App {
     pub cursor: usize,
     pub expanded: HashSet<FileKey>,
     pub diff_cache: HashMap<FileKey, Rc<str>>,
+    /// State of each listed file as of the last refresh.
+    fingerprints: HashMap<FileKey, Fingerprint>,
+    /// Files that changed on disk behind rugit's back, until the instant given.
+    highlights: HashMap<FileKey, Instant>,
     pub pending_key: Option<KeyCode>,
     pub status_msg: Option<String>,
     pub commit_preview: Option<CommitPreview>,
@@ -352,6 +364,8 @@ impl App {
             cursor: 0,
             expanded: HashSet::new(),
             diff_cache: HashMap::new(),
+            fingerprints: HashMap::new(),
+            highlights: HashMap::new(),
             pending_key: None,
             status_msg: None,
             commit_preview: None,
@@ -369,6 +383,7 @@ impl App {
             log_filter: None,
             log_filtered: Vec::new(),
         };
+        app.fingerprints = app.fingerprint_entries();
         app.rebuild_items();
         Ok(app)
     }
@@ -457,9 +472,38 @@ impl App {
         self.status = self.backend.status()?;
         self.recent_commits = self.backend.log(self.config.recent_limit).unwrap_or_default();
         self.stashes = self.backend.stash_list().unwrap_or_default();
+        self.fingerprints = self.fingerprint_entries();
         self.rebuild_items();
         self.clamp_cursor();
         Ok(())
+    }
+
+    fn fingerprint_entries(&self) -> HashMap<FileKey, Fingerprint> {
+        let root = self.backend.repo_root();
+        [Section::Untracked, Section::Unstaged, Section::Staged]
+            .into_iter()
+            .flat_map(|section| self.section_entries(section).iter().map(move |e| (section, e)))
+            .map(|(section, entry)| {
+                let meta = std::fs::metadata(root.join(&entry.path)).ok();
+                let stamp = meta.and_then(|m| Some((m.modified().ok()?, m.len())));
+                (file_key(section, &entry.path), (entry.kind.clone(), stamp))
+            })
+            .collect()
+    }
+
+    /// Whether `key` changed outside rugit recently enough to still flag.
+    pub fn is_highlighted(&self, section: Section, path: &str) -> bool {
+        self.highlights
+            .get(&file_key(section, path))
+            .is_some_and(|until| Instant::now() < *until)
+    }
+
+    /// Drop expired highlights. Returns whether any were removed (redraw needed).
+    pub fn expire_highlights(&mut self) -> bool {
+        let now = Instant::now();
+        let before = self.highlights.len();
+        self.highlights.retain(|_, until| now < *until);
+        self.highlights.len() != before
     }
 
     /// Whether a background refresh would be safe: it rebuilds the item list,
@@ -505,7 +549,14 @@ impl App {
             }
         }
 
+        let before = std::mem::take(&mut self.fingerprints);
         self.refresh()?;
+        let until = Instant::now() + HIGHLIGHT_FOR;
+        for (key, fingerprint) in &self.fingerprints {
+            if before.get(key) != Some(fingerprint) {
+                self.highlights.insert(key.clone(), until);
+            }
+        }
         if let Some(anchor) = anchor {
             self.restore_cursor(&anchor);
         }
@@ -985,6 +1036,29 @@ mod tests {
         assert!(app.items.iter().any(|item| matches!(item, StatusItem::DiffLine { line, .. } if &**line == "+D")));
         assert!(!app.items.iter().any(|item| matches!(item, StatusItem::DiffLine { line, .. } if &**line == "+C")));
         assert_eq!(app.cursor, diff_line(&app, "-c"), "cursor stays on the same diff line");
+    }
+
+    #[test]
+    fn auto_refresh_highlights_only_what_changed_outside() {
+        let (repo, mut app) = app_with_expanded_diff();
+
+        // Nothing happened yet: a no-op refresh flags nothing.
+        app.auto_refresh().unwrap();
+        assert!(!app.is_highlighted(Section::Unstaged, "f"));
+
+        // New file appears, and the already-modified one is edited again.
+        fs::write(repo.path.join("g"), "new").unwrap();
+        fs::write(repo.path.join("f"), "A\nb\nCC\n").unwrap();
+        app.auto_refresh().unwrap();
+        assert!(app.is_highlighted(Section::Untracked, "g"));
+        assert!(app.is_highlighted(Section::Unstaged, "f"));
+
+        // Highlights fade.
+        for until in app.highlights.values_mut() {
+            *until = std::time::Instant::now();
+        }
+        assert!(app.expire_highlights());
+        assert!(!app.is_highlighted(Section::Untracked, "g"));
     }
 
     #[test]

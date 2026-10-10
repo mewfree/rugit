@@ -44,7 +44,11 @@ pub fn render_status(f: &mut Frame, app: &App, area: Rect) {
             let i = offset + vis_i;
             let in_visual = visual_range
                 .is_some_and(|(s, e)| (s..=e).contains(&i) && i != app.cursor);
-            status_item_to_list_item(item, in_visual)
+            let changed = match item {
+                StatusItem::File { entry, section, .. } => app.is_highlighted(*section, &entry.path),
+                _ => false,
+            };
+            status_item_to_list_item(item, in_visual, changed)
         })
         .collect();
 
@@ -64,7 +68,8 @@ pub fn render_status(f: &mut Frame, app: &App, area: Rect) {
     f.render_stateful_widget(list, area, &mut state);
 }
 
-fn status_item_to_list_item(item: &StatusItem, in_visual: bool) -> ListItem<'static> {
+/// `changed`: the file was modified outside rugit moments ago.
+fn status_item_to_list_item(item: &StatusItem, in_visual: bool, changed: bool) -> ListItem<'static> {
     let visual_bg = Color::Rgb(60, 40, 100);
 
     let list_item = match item {
@@ -153,6 +158,8 @@ fn status_item_to_list_item(item: &StatusItem, in_visual: bool) -> ListItem<'sta
 
     if in_visual {
         list_item.style(Style::new().bg(visual_bg))
+    } else if changed {
+        list_item.style(Style::new().bg(Color::Rgb(70, 55, 10)))
     } else {
         list_item
     }

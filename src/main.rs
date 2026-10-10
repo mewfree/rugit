@@ -113,12 +113,13 @@ fn run_app(terminal: &mut Term, app: &mut App) -> Result<()> {
         if needs_redraw {
             draw(terminal, app)?;
         }
-        needs_redraw = false;
         if !event::poll(QUIET)? {
             // Idle. Pick up repo changes once nothing is half-done in the UI.
             if watcher.as_ref().is_some_and(RepoWatcher::take_changed) {
                 stale = true;
             }
+            // Fade highlights from the last refresh.
+            needs_redraw = app.expire_highlights();
             if stale && app.can_auto_refresh() {
                 stale = false;
                 if app.auto_refresh().is_ok() {
