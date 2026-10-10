@@ -351,6 +351,8 @@ pub struct App {
     line_highlights: HashMap<FileKey, (Instant, HashSet<(usize, usize)>)>,
     pub pending_key: Option<KeyCode>,
     pub status_msg: Option<String>,
+    /// Last failure, shown in red until the next keypress.
+    pub error_msg: Option<String>,
     pub commit_preview: Option<CommitPreview>,
     pub help_scroll: Scroll,
     pub should_quit: bool,
@@ -394,6 +396,7 @@ impl App {
             line_highlights: HashMap::new(),
             pending_key: None,
             status_msg: None,
+            error_msg: None,
             commit_preview: None,
             help_scroll: Scroll::new(),
             should_quit: false,

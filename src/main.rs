@@ -167,6 +167,7 @@ fn handle_mouse(app: &mut App, kind: MouseEventKind) -> bool {
 /// Route a keypress to the open popup, the editor, or the active buffer.
 fn handle_key(terminal: &mut Term, app: &mut App, key: KeyEvent) -> Result<()> {
     let code = key.code;
+    app.error_msg = None;
     let log_filter_key = app.buffer == ActiveBuffer::Log
         && (code == KeyCode::Char('/') || (code == KeyCode::Esc && app.log_filter.is_some()));
 
@@ -226,7 +227,8 @@ fn first_line(s: &str) -> &str {
 
 /// Show an error in the footer. Git errors can span many lines; the footer has one.
 fn show_error(app: &mut App, prefix: &str, err: &anyhow::Error) {
-    app.status_msg = Some(format!("{prefix}: {}", first_line(&err.to_string())));
+    app.status_msg = None;
+    app.error_msg = Some(format!("{prefix}: {}", first_line(&err.to_string())));
 }
 
 fn report(app: &mut App, result: Result<()>) {
@@ -472,7 +474,6 @@ fn handle_action(terminal: &mut Term, app: &mut App, action: Action) -> Result<(
         Action::Pull => run_remote(terminal, app, "Pulling…", "Pulled.", "Pull failed", |b| b.pull())?,
         Action::VisualMode => {
             app.visual_anchor = Some(app.cursor);
-            app.status_msg = Some("-- VISUAL --".to_string());
         }
         Action::StashBegin => begin_chord(app, 'z', "z-"),
         Action::StashSave => {

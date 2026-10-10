@@ -61,6 +61,9 @@ User-remappable keys in =config.toml= (e.g. a =[keys]= table of key → action n
 
 * Done
 
+** DONE Distinct error styling and visual-mode indicator
+Failures show in bold red with a =✗= prefix (own =error_msg= field, cleared on the next key) instead of the green info colour. Visual mode is a persistent =VISUAL= badge in the header rather than a footer message, so the context-aware footer hints stay visible while selecting.
+
 ** DONE Context-aware footer
 The footer lists hints for the current mode (status, visual selection, log) and, on a narrow terminal, drops the least important ones first instead of truncating mid-hint. Help and quit are never dropped.
 

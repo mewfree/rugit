@@ -93,6 +93,13 @@ fn build_head_line(app: &App) -> Line<'static> {
             Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
         ),
     ];
+    if app.visual_anchor.is_some() {
+        spans.push(Span::styled(
+            " VISUAL ",
+            Style::new().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::raw(" "));
+    }
     let status = &app.status;
     match (&status.head, &status.head_short_hash, &status.head_summary) {
         (Some(branch), hash, summary) => {
@@ -156,6 +163,15 @@ const LOG_HINTS: &[Hint] = &[
 ];
 
 fn build_footer(app: &App, width: usize) -> Line<'static> {
+    if let Some(msg) = &app.error_msg {
+        return Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                format!("✗ {msg}"),
+                Style::new().fg(Color::LightRed).add_modifier(Modifier::BOLD),
+            ),
+        ]);
+    }
     if let Some(msg) = &app.status_msg {
         return Line::from(vec![
             Span::styled(" ", Style::new()),
