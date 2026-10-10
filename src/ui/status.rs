@@ -46,6 +46,9 @@ pub fn render_status(f: &mut Frame, app: &App, area: Rect) {
                 .is_some_and(|(s, e)| (s..=e).contains(&i) && i != app.cursor);
             let changed = match item {
                 StatusItem::File { entry, section, .. } => app.is_highlighted(*section, &entry.path),
+                StatusItem::DiffLine { file_path, section, hunk_index, line_in_hunk, .. } => {
+                    app.is_line_highlighted(*section, file_path, *hunk_index, *line_in_hunk)
+                }
                 _ => false,
             };
             status_item_to_list_item(item, in_visual, changed)
@@ -68,7 +71,7 @@ pub fn render_status(f: &mut Frame, app: &App, area: Rect) {
     f.render_stateful_widget(list, area, &mut state);
 }
 
-/// `changed`: the file was modified outside rugit moments ago.
+/// `changed`: the file or diff line was modified outside rugit moments ago.
 fn status_item_to_list_item(item: &StatusItem, in_visual: bool, changed: bool) -> ListItem<'static> {
     let visual_bg = Color::Rgb(60, 40, 100);
 

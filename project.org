@@ -62,7 +62,7 @@ User-remappable keys in =config.toml= (e.g. a =[keys]= table of key → action n
 * Done
 
 ** DONE Highlight files changed outside rugit
-After a background refresh, files that appeared or whose kind/mtime/size changed get an amber row tint for ~1.5s, so a shifting list doesn't look like a glitch. Changes rugit made itself don't flash: the baseline updates on every refresh.
+After a background refresh, files that appeared or whose kind/mtime/size changed get an amber row tint for ~1.5s, as do added/removed diff lines that changed inside expanded files (line-diffed old vs new with =similar=), so a shifting list doesn't look like a glitch. Changes rugit made itself don't flash: the baseline updates on every refresh.
 
 ** DONE Background auto-refresh (filesystem watcher)
 =notify= watches the repo root; the event loop polls with a 150ms quiet window and re-reads status when something changed. Ignores gitignored paths and =.git= churn (only index/HEAD/refs count). Skipped while an editor, popup, visual selection or chord is active, and applied once that ends. Expanded diffs are re-fetched and the cursor stays on the same item. =g= still refreshes by hand.

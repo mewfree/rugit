@@ -325,6 +325,9 @@ pub struct App {
     fingerprints: HashMap<FileKey, Fingerprint>,
     /// Files that changed on disk behind rugit's back, until the instant given.
     highlights: HashMap<FileKey, Instant>,
+    /// Diff lines that changed outside rugit, as (hunk index, line in hunk),
+    /// per expanded file, until the instant given.
+    line_highlights: HashMap<FileKey, (Instant, HashSet<(usize, usize)>)>,
     pub pending_key: Option<KeyCode>,
     pub status_msg: Option<String>,
     pub commit_preview: Option<CommitPreview>,
@@ -366,6 +369,7 @@ impl App {
             diff_cache: HashMap::new(),
             fingerprints: HashMap::new(),
             highlights: HashMap::new(),
+            line_highlights: HashMap::new(),
             pending_key: None,
             status_msg: None,
             commit_preview: None,
@@ -498,12 +502,20 @@ impl App {
             .is_some_and(|until| Instant::now() < *until)
     }
 
+    /// Whether a diff line was added or removed outside rugit moments ago.
+    pub fn is_line_highlighted(&self, section: Section, path: &str, hunk_index: usize, line_in_hunk: usize) -> bool {
+        self.line_highlights
+            .get(&file_key(section, path))
+            .is_some_and(|(until, lines)| Instant::now() < *until && lines.contains(&(hunk_index, line_in_hunk)))
+    }
+
     /// Drop expired highlights. Returns whether any were removed (redraw needed).
     pub fn expire_highlights(&mut self) -> bool {
         let now = Instant::now();
-        let before = self.highlights.len();
+        let before = self.highlights.len() + self.line_highlights.len();
         self.highlights.retain(|_, until| now < *until);
-        self.highlights.len() != before
+        self.line_highlights.retain(|_, (until, _)| now < *until);
+        self.highlights.len() + self.line_highlights.len() != before
     }
 
     /// Whether a background refresh would be safe: it rebuilds the item list,
@@ -527,7 +539,8 @@ impl App {
         let status = self.backend.status()?;
 
         // Cached diffs may be stale, and files may have left their section.
-        self.diff_cache.clear();
+        let old_diffs = std::mem::take(&mut self.diff_cache);
+        let until = Instant::now() + HIGHLIGHT_FOR;
         let present = |(section, path): &FileKey| {
             let entries = match section {
                 Section::Staged => &status.staged,
@@ -541,6 +554,12 @@ impl App {
         for key in keys {
             match self.backend.diff_file(&key.1, key.0 == Section::Staged) {
                 Ok(diff) => {
+                    if let Some(old) = old_diffs.get(&key) {
+                        let lines = changed_diff_lines(old, &diff);
+                        if !lines.is_empty() {
+                            self.line_highlights.insert(key.clone(), (until, lines));
+                        }
+                    }
                     self.diff_cache.insert(key, diff.into());
                 }
                 Err(_) => {
@@ -551,7 +570,6 @@ impl App {
 
         let before = std::mem::take(&mut self.fingerprints);
         self.refresh()?;
-        let until = Instant::now() + HIGHLIGHT_FOR;
         for (key, fingerprint) in &self.fingerprints {
             if before.get(key) != Some(fingerprint) {
                 self.highlights.insert(key.clone(), until);
@@ -962,6 +980,35 @@ impl App {
     }
 }
 
+/// Added/removed lines of `new` that aren't in `old`, as (hunk index, line in
+/// hunk) — the same coordinates `push_diff_items` gives `DiffLine`s.
+fn changed_diff_lines(old: &str, new: &str) -> HashSet<(usize, usize)> {
+    use similar::{ChangeTag, TextDiff};
+
+    // Coordinates of each line of `new`; None outside a hunk body.
+    let mut coords = Vec::new();
+    let mut hunk_index: Option<usize> = None;
+    let mut line_in_hunk = 0;
+    for line in new.lines() {
+        if line.starts_with("@@") {
+            hunk_index = Some(hunk_index.map_or(0, |i| i + 1));
+            line_in_hunk = 0;
+            coords.push(None);
+        } else if let Some(h) = hunk_index {
+            coords.push(diff::is_change(line).then_some((h, line_in_hunk)));
+            line_in_hunk += 1;
+        } else {
+            coords.push(None);
+        }
+    }
+
+    TextDiff::from_lines(old, new)
+        .iter_all_changes()
+        .filter(|change| change.tag() == ChangeTag::Insert)
+        .filter_map(|change| coords.get(change.new_index()?).copied().flatten())
+        .collect()
+}
+
 /// Push a hunk header or diff line item for each line of `diff`. Lines
 /// before the first hunk (the file header) are skipped.
 fn push_diff_items(items: &mut Vec<StatusItem>, diff: &Rc<str>, file_path: Rc<str>, section: Section) {
@@ -1053,12 +1100,27 @@ mod tests {
         assert!(app.is_highlighted(Section::Untracked, "g"));
         assert!(app.is_highlighted(Section::Unstaged, "f"));
 
+        // Only the diff line that changed is flagged, not its untouched neighbours.
+        let flagged = |app: &App, text: &str| match &app.items[diff_line(app, text)] {
+            StatusItem::DiffLine { section, file_path, hunk_index, line_in_hunk, .. } => {
+                app.is_line_highlighted(*section, file_path, *hunk_index, *line_in_hunk)
+            }
+            _ => unreachable!(),
+        };
+        assert!(flagged(&app, "+CC"));
+        assert!(!flagged(&app, "+A"));
+        assert!(!flagged(&app, "-c"));
+
         // Highlights fade.
         for until in app.highlights.values_mut() {
             *until = std::time::Instant::now();
         }
+        for (until, _) in app.line_highlights.values_mut() {
+            *until = std::time::Instant::now();
+        }
         assert!(app.expire_highlights());
         assert!(!app.is_highlighted(Section::Untracked, "g"));
+        assert!(!flagged(&app, "+CC"));
     }
 
     #[test]
