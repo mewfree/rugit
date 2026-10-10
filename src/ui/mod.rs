@@ -79,6 +79,9 @@ pub fn render(f: &mut Frame, app: &App) {
     if let Some(state) = &app.branch_name_input {
         popup::render_branch_name_input(f, area, state);
     }
+    if let Some(state) = &app.palette {
+        popup::render_palette(f, area, state);
+    }
     if let Some(input) = &app.log_search {
         popup::render_log_search(f, area, input);
     }
@@ -148,6 +151,7 @@ const STATUS_HINTS: &[Hint] = &[
     hint("[b]", "ranch", 6),
     hint("[l]", "og", 6),
     hint("[g]", "refresh", 8),
+    hint("[:]", "commands", 5),
     hint("[?]", "help", 0),
     hint("[q]", "uit", 0),
 ];

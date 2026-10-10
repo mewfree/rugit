@@ -10,6 +10,7 @@ use tui_textarea::TextArea;
 
 use crate::backend::{Backend, BranchInfo, CommitInfo, FileEntry, FileKind, RepoStatus, StashInfo};
 use crate::config::Config;
+use crate::keybindings::{Command, COMMANDS};
 use crate::diff;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -70,6 +71,54 @@ pub struct BranchNameInputState {
     pub input: String,
     pub mode: BranchNameMode,
     pub original: String,
+}
+
+/// Command palette: a query narrowing `COMMANDS` by fuzzy match.
+pub struct PaletteState {
+    pub query: String,
+    pub cursor: usize,
+    /// Indices into `COMMANDS` matching `query`, best first.
+    pub matches: Vec<usize>,
+}
+
+impl PaletteState {
+    pub fn new() -> Self {
+        let mut state = Self { query: String::new(), cursor: 0, matches: Vec::new() };
+        state.refilter();
+        state
+    }
+
+    /// Whether `needle`'s characters appear in `haystack` in order.
+    fn subsequence(needle: &str, haystack: &str) -> bool {
+        let mut rest = haystack.chars();
+        needle.chars().all(|c| rest.any(|h| h == c))
+    }
+
+    pub fn refilter(&mut self) {
+        let needle: String = self.query.chars().filter(|c| !c.is_whitespace()).flat_map(char::to_lowercase).collect();
+        let haystack = |c: &Command| format!("{} {}", c.name, c.keys).to_lowercase();
+        let (mut contiguous, mut scattered) = (Vec::new(), Vec::new());
+        for (i, command) in COMMANDS.iter().enumerate() {
+            let hay = haystack(command);
+            if hay.contains(&self.query.trim().to_lowercase()) {
+                contiguous.push(i);
+            } else if Self::subsequence(&needle, &hay) {
+                scattered.push(i);
+            }
+        }
+        contiguous.append(&mut scattered);
+        self.matches = contiguous;
+        self.cursor = 0;
+    }
+
+    pub fn step(&mut self, delta: isize) {
+        let last = self.matches.len().saturating_sub(1);
+        self.cursor = self.cursor.saturating_add_signed(delta).min(last);
+    }
+
+    pub fn selected(&self) -> Option<&'static Command> {
+        COMMANDS.get(*self.matches.get(self.cursor)?)
+    }
 }
 
 /// A push/pull running on a worker thread.
@@ -374,6 +423,7 @@ pub struct App {
     pub error_msg: Option<String>,
     pub commit_preview: Option<CommitPreview>,
     pub help_scroll: Scroll,
+    pub palette: Option<PaletteState>,
     /// Push/pull in flight; at most one at a time.
     pub remote_job: Option<RemoteJob>,
     pub should_quit: bool,
@@ -420,6 +470,7 @@ impl App {
             error_msg: None,
             commit_preview: None,
             help_scroll: Scroll::new(),
+            palette: None,
             remote_job: None,
             should_quit: false,
             recent_commits,
@@ -578,6 +629,7 @@ impl App {
             && self.stash_list.is_none()
             && self.branch_picker.is_none()
             && self.branch_name_input.is_none()
+            && self.palette.is_none()
     }
 
     /// Re-read the repo after it changed on disk, keeping expanded diffs
@@ -1217,5 +1269,36 @@ mod tests {
         app.discard_at_cursor().unwrap();
         assert_eq!(fs::read_to_string(repo.path.join("f")).unwrap(), "a\nb\nc\n");
         assert!(app.status.unstaged.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod palette_tests {
+    use super::PaletteState;
+    use crate::keybindings::Action;
+
+    fn type_query(query: &str) -> PaletteState {
+        let mut palette = PaletteState::new();
+        palette.query = query.to_string();
+        palette.refilter();
+        palette
+    }
+
+    #[test]
+    fn empty_query_lists_everything() {
+        assert_eq!(type_query("").matches.len(), crate::keybindings::COMMANDS.len());
+    }
+
+    #[test]
+    fn substring_beats_scattered_match() {
+        let palette = type_query("amend");
+        assert_eq!(palette.selected().map(|c| c.action.clone()), Some(Action::CommitAmendConfirm));
+    }
+
+    #[test]
+    fn matches_by_keys_and_fuzzily() {
+        assert_eq!(type_query("z l").selected().map(|c| c.action.clone()), Some(Action::StashList));
+        assert!(type_query("frcpsh").selected().is_some_and(|c| c.action == Action::PushForce));
+        assert!(type_query("zzzzqq").selected().is_none());
     }
 }

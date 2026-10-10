@@ -40,12 +40,62 @@ pub enum Action {
     BranchCreate,    // 'b c'
     BranchDelete,    // 'b d'
     BranchRename,    // 'b r'
+    CommandPalette,  // ':' or Alt-x
     PageDown,        // Ctrl-d
     PageUp,          // Ctrl-u
     None,
 }
 
+/// An entry in the command palette: a runnable action and its keybinding.
+pub struct Command {
+    pub name: &'static str,
+    pub keys: &'static str,
+    pub action: Action,
+}
+
+const fn cmd(name: &'static str, keys: &'static str, action: Action) -> Command {
+    Command { name, keys, action }
+}
+
+/// Every action worth running by name. Chord prefixes are left out: the palette
+/// lists what a chord resolves to.
+pub const COMMANDS: &[Command] = &[
+    cmd("Stage file / hunk at point", "s", Action::StageFile),
+    cmd("Unstage file / hunk at point", "u", Action::UnstageFile),
+    cmd("Discard changes at point", "x", Action::DiscardFile),
+    cmd("Stage all changes", "S", Action::StageAll),
+    cmd("Unstage all changes", "U", Action::UnstageAll),
+    cmd("Toggle diff expansion", "Tab", Action::ToggleExpand),
+    cmd("Visual selection mode", "V", Action::VisualMode),
+    cmd("Commit staged changes", "c c", Action::CommitConfirm),
+    cmd("Amend last commit", "c a", Action::CommitAmendConfirm),
+    cmd("Instant fixup into a commit", "c F", Action::FixupPick),
+    cmd("Instant squash into a commit", "c S", Action::SquashPick),
+    cmd("Reword a commit's message", "r w", Action::RewordPick),
+    cmd("Remove a commit", "r k", Action::DropPick),
+    cmd("Push to upstream", "p p", Action::Push),
+    cmd("Force-push (--force-with-lease)", "p f", Action::PushForce),
+    cmd("Pull from upstream", "F", Action::Pull),
+    cmd("Stash changes", "z z", Action::StashSave),
+    cmd("Pop latest stash", "z p", Action::StashPop),
+    cmd("Apply latest stash", "z a", Action::StashApply),
+    cmd("Drop latest stash", "z d", Action::StashDrop),
+    cmd("List stashes", "z l", Action::StashList),
+    cmd("Checkout branch", "b b", Action::BranchCheckout),
+    cmd("Create & checkout new branch", "b c", Action::BranchCreate),
+    cmd("Delete branch", "b d", Action::BranchDelete),
+    cmd("Rename current branch", "b r", Action::BranchRename),
+    cmd("Show log", "l", Action::SwitchToLog),
+    cmd("Refresh", "g", Action::Refresh),
+    cmd("Show help", "?", Action::ShowHelp),
+    cmd("Quit", "q", Action::Quit),
+];
+
 pub fn key_to_action(key: KeyEvent, pending: Option<KeyCode>) -> Action {
+    if key.modifiers.contains(KeyModifiers::ALT) && key.code == KeyCode::Char('x') {
+        return Action::CommandPalette;
+    }
+
     // Handle ctrl-c / ctrl-q / ctrl-d / ctrl-u
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         match key.code {
@@ -93,6 +143,7 @@ pub fn key_to_action(key: KeyEvent, pending: Option<KeyCode>) -> Action {
         KeyCode::Char('l') => Action::SwitchToLog,
         KeyCode::Char('b') => Action::BranchBegin,
         KeyCode::Char('g') => Action::Refresh,
+        KeyCode::Char(':') => Action::CommandPalette,
         KeyCode::Char('?') => Action::ShowHelp,
         KeyCode::Esc => Action::HideHelp,
         KeyCode::Enter => Action::Enter,

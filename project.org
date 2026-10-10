@@ -50,13 +50,13 @@ Implement all Backend trait methods using =jj= subprocess calls.
 
 ** TODO Packaging (Homebrew formula, AUR PKGBUILD, Nix flake)
 
-** TODO Command palette (=:= or =M-x=)
-Fuzzy-searchable list of every action with its keybinding; Enter runs it. Doubles as discoverability and a home for rarely used commands. Reuses the =Action= enum and the log filter's matching.
-
 ** TODO Keymap config
 User-remappable keys in =config.toml= (e.g. a =[keys]= table of key → action name), plus "magit" and "lazygit" presets. Needs =key_to_action= to consult a lookup table built from config instead of hard-coded matches, and the help popup / footer to render the active bindings.
 
 * Done
+
+** DONE Command palette (=:= or =Alt-x=)
+Fuzzy-searchable list of every action with its keybinding; typing narrows it (contiguous matches first), =Up=/=Down= or =C-n=/=C-p= select, =Enter= runs it. Run from the log, an item-based command first returns to the status buffer.
 
 ** DONE Async push/pull with progress indicator
 Push, force-push and pull run on a worker thread (=Backend::reopen= hands it its own handle) and report through a channel the event loop polls. A spinner shows in the header while it runs, the UI and auto-refresh stay live, and a second network op is refused until the first finishes.

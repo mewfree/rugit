@@ -20,7 +20,7 @@ mod keybindings;
 mod ui;
 mod watch;
 
-use app::{ActiveBuffer, App, RemoteJob, BranchNameInputState, BranchNameMode, BranchPickerMode, BranchPickerState, CommitPickerState, CommitPreview, EditorIntent, EditorMode, EditorState, FixupMode, PatchOp, StashListState, StatusItem};
+use app::{ActiveBuffer, App, RemoteJob, BranchNameInputState, BranchNameMode, BranchPickerMode, BranchPickerState, CommitPickerState, CommitPreview, EditorIntent, EditorMode, EditorState, FixupMode, PatchOp, PaletteState, StashListState, StatusItem};
 use backend::{detect_backend, Backend, BackendKind};
 use config::Config;
 use keybindings::{key_to_action, Action};
@@ -176,7 +176,9 @@ fn handle_key(terminal: &mut Term, app: &mut App, key: KeyEvent) -> Result<()> {
     let log_filter_key = app.buffer == ActiveBuffer::Log
         && (code == KeyCode::Char('/') || (code == KeyCode::Esc && app.log_filter.is_some()));
 
-    if app.stash_list.is_some() {
+    if app.palette.is_some() {
+        handle_palette_key(terminal, app, key)?;
+    } else if app.stash_list.is_some() {
         handle_stash_list_key(app, code);
     } else if app.log_search.is_some() {
         handle_log_search_key(app, code);
@@ -402,6 +404,41 @@ fn handle_preview_key(app: &mut App, code: KeyCode) {
     }
 }
 
+fn handle_palette_key(terminal: &mut Term, app: &mut App, key: KeyEvent) -> Result<()> {
+    let Some(palette) = app.palette.as_mut() else { return Ok(()) };
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    match key.code {
+        KeyCode::Esc => app.palette = None,
+        KeyCode::Char('c') if ctrl => app.palette = None,
+        KeyCode::Down => palette.step(1),
+        KeyCode::Up => palette.step(-1),
+        KeyCode::Char('n') if ctrl => palette.step(1),
+        KeyCode::Char('p') if ctrl => palette.step(-1),
+        KeyCode::Backspace => {
+            palette.query.pop();
+            palette.refilter();
+        }
+        KeyCode::Char(c) if !ctrl => {
+            palette.query.push(c);
+            palette.refilter();
+        }
+        KeyCode::Enter => {
+            let action = palette.selected().map(|c| c.action.clone());
+            app.palette = None;
+            if let Some(action) = action {
+                // Item-based actions mean nothing over the log's cursor.
+                if app.buffer == ActiveBuffer::Log && action != Action::SwitchToLog {
+                    app.buffer = ActiveBuffer::Status;
+                    app.cursor = 0;
+                }
+                handle_action(terminal, app, action)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 fn handle_help_key(app: &mut App, key: KeyEvent) {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     match key.code {
@@ -460,6 +497,7 @@ fn handle_action(terminal: &mut Term, app: &mut App, action: Action) -> Result<(
                 show_error(app, "Error refreshing", &e);
             }
         }
+        Action::CommandPalette => app.palette = Some(PaletteState::new()),
         Action::ShowHelp => {
             app.help_scroll.reset();
             app.buffer = ActiveBuffer::Help;

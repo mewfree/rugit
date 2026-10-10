@@ -5,7 +5,8 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
     Frame,
 };
-use crate::app::{Scroll, BranchNameInputState, BranchNameMode, BranchPickerMode, BranchPickerState, CommitPickerState, CommitPreview, FixupMode, StashListState};
+use crate::keybindings::COMMANDS;
+use crate::app::{PaletteState, Scroll, BranchNameInputState, BranchNameMode, BranchPickerMode, BranchPickerState, CommitPickerState, CommitPreview, FixupMode, StashListState};
 
 /// Bordered block with a centered title.
 fn popup_block<'a>(title: impl Into<Line<'a>>, color: Color) -> Block<'a> {
@@ -140,6 +141,7 @@ pub fn render_help(f: &mut Frame, area: Rect, scroll: &Scroll) {
         key("  /           ", "Filter log by hash/author/message (in log view)"),
         key("  Esc         ", "Clear log filter"),
         key("  g           ", "Refresh"),
+        key("  : / Alt-x   ", "Command palette (run any command by name)"),
         key("  ?           ", "Show this help"),
         key("  q / Esc     ", "Quit / close"),
     ];
@@ -329,6 +331,36 @@ pub fn render_branch_name_input(f: &mut Frame, area: Rect, state: &BranchNameInp
         BranchNameMode::Rename => (" Rename branch ", format!("  Rename '{}' to: {}_", state.original, state.input)),
     };
     render_prompt(f, area, title, prompt, "  Enter: confirm   Esc: cancel");
+}
+
+pub fn render_palette(f: &mut Frame, area: Rect, state: &PaletteState) {
+    let size = (60, 60);
+    let mut lines = list_lines(
+        area, size, &state.matches, state.cursor,
+        "  ↑/↓: select   Enter: run   Esc: cancel",
+        |&index, selected| {
+            let command = &COMMANDS[index];
+            let name_style = if selected {
+                Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            } else {
+                Style::new()
+            };
+            Line::from(vec![
+                Span::raw(selection_prefix(selected)),
+                Span::styled(format!("{:<34}", command.name), name_style),
+                Span::styled(command.keys, Style::new().fg(Color::Cyan)),
+            ])
+        },
+    );
+    // The blank first row becomes the query prompt.
+    lines[0] = Line::from(vec![
+        Span::styled("  : ", Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::raw(format!("{}_", state.query)),
+    ]);
+    if state.matches.is_empty() {
+        lines.insert(1, hint("  no matching command"));
+    }
+    render_popup(f, area, size, popup_block(" Command palette ", Color::Cyan), lines);
 }
 
 pub fn render_log_search(f: &mut Frame, area: Rect, input: &str) {
