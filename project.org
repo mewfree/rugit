@@ -61,6 +61,9 @@ User-remappable keys in =config.toml= (e.g. a =[keys]= table of key → action n
 
 * Done
 
+** DONE Scrollable help popup
+Help is taller than many terminals. =j=/=k=, =d=/=u=, =g=/=G= and the mouse wheel scroll it; the hint line shows the scroll keys only when the content overflows.
+
 ** DONE Highlight files changed outside rugit
 After a background refresh, files that appeared or whose kind/mtime/size changed get an amber row tint for ~1.5s, as do added/removed diff lines that changed inside expanded files (line-diffed old vs new with =similar=), so a shifting list doesn't look like a glitch. Changes rugit made itself don't flash: the baseline updates on every refresh.
 

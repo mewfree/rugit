@@ -71,6 +71,27 @@ pub struct BranchNameInputState {
     pub original: String,
 }
 
+/// Scroll offset for a popup that may be taller than its viewport.
+pub struct Scroll {
+    pub offset: u16,
+    /// Furthest useful offset; updated by the renderer once it knows the viewport height.
+    pub max: std::cell::Cell<u16>,
+}
+
+impl Scroll {
+    pub fn new() -> Self {
+        Self { offset: 0, max: std::cell::Cell::new(u16::MAX) }
+    }
+
+    pub fn by(&mut self, lines: i16) {
+        self.offset = self.offset.saturating_add_signed(lines).min(self.max.get());
+    }
+
+    pub fn reset(&mut self) {
+        self.offset = 0;
+    }
+}
+
 pub struct CommitPreview {
     pub title: String,
     pub content: String,
@@ -331,6 +352,7 @@ pub struct App {
     pub pending_key: Option<KeyCode>,
     pub status_msg: Option<String>,
     pub commit_preview: Option<CommitPreview>,
+    pub help_scroll: Scroll,
     pub should_quit: bool,
     pub recent_commits: Vec<CommitInfo>,
     /// Flat list of visible status items (rebuilt on refresh)
@@ -373,6 +395,7 @@ impl App {
             pending_key: None,
             status_msg: None,
             commit_preview: None,
+            help_scroll: Scroll::new(),
             should_quit: false,
             recent_commits,
             items: Vec::new(),

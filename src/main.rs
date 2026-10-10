@@ -154,8 +154,10 @@ fn handle_mouse(app: &mut App, kind: MouseEventKind) -> bool {
         MouseEventKind::ScrollUp => false,
         _ => return false,
     };
+    let lines = if down { 3 } else { -3 };
     match app.commit_preview.as_mut() {
-        Some(preview) => preview.scroll_by(if down { 3 } else { -3 }),
+        Some(preview) => preview.scroll_by(lines),
+        None if app.buffer == ActiveBuffer::Help => app.help_scroll.by(lines),
         None if down => app.move_down(),
         None => app.move_up(),
     }
@@ -188,6 +190,8 @@ fn handle_key(terminal: &mut Term, app: &mut App, key: KeyEvent) -> Result<()> {
         handle_commit_picker_key(app, code);
     } else if app.commit_preview.is_some() {
         handle_preview_key(app, code);
+    } else if app.buffer == ActiveBuffer::Help {
+        handle_help_key(app, key);
     } else if app.buffer == ActiveBuffer::Editor {
         handle_editor_key(app, key);
     } else if code == KeyCode::Esc && app.visual_anchor.is_some() {
@@ -391,6 +395,21 @@ fn handle_preview_key(app: &mut App, code: KeyCode) {
     }
 }
 
+fn handle_help_key(app: &mut App, key: KeyEvent) {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    match key.code {
+        KeyCode::Char('q' | '?') | KeyCode::Esc => app.buffer = ActiveBuffer::Status,
+        KeyCode::Char('c') if ctrl => app.should_quit = true,
+        KeyCode::Char('j') | KeyCode::Down => app.help_scroll.by(1),
+        KeyCode::Char('k') | KeyCode::Up => app.help_scroll.by(-1),
+        KeyCode::Char('d') => app.help_scroll.by(10),
+        KeyCode::Char('u') => app.help_scroll.by(-10),
+        KeyCode::Char('g') => app.help_scroll.reset(),
+        KeyCode::Char('G') => app.help_scroll.by(i16::MAX),
+        _ => {}
+    }
+}
+
 fn handle_action(terminal: &mut Term, app: &mut App, action: Action) -> Result<()> {
     match action {
         Action::Quit => {
@@ -434,7 +453,10 @@ fn handle_action(terminal: &mut Term, app: &mut App, action: Action) -> Result<(
                 show_error(app, "Error refreshing", &e);
             }
         }
-        Action::ShowHelp => app.buffer = ActiveBuffer::Help,
+        Action::ShowHelp => {
+            app.help_scroll.reset();
+            app.buffer = ActiveBuffer::Help;
+        }
         Action::Enter => open_commit_preview(app),
         Action::CommitBegin => begin_chord(app, 'c', "c-"),
         Action::CommitConfirm => open_commit_editor(app, EditorIntent::Commit),

@@ -42,7 +42,7 @@ pub fn render(f: &mut Frame, app: &App) {
         ActiveBuffer::Help => {
             // Show status underneath, then overlay help popup
             status::render_status(f, app, chunks[1]);
-            popup::render_help(f, area);
+            popup::render_help(f, area, &app.help_scroll);
         }
         ActiveBuffer::Editor => {
             if let Some(state) = &app.editor {

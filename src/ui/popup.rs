@@ -5,7 +5,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
     Frame,
 };
-use crate::app::{BranchNameInputState, BranchNameMode, BranchPickerMode, BranchPickerState, CommitPickerState, CommitPreview, FixupMode, StashListState};
+use crate::app::{Scroll, BranchNameInputState, BranchNameMode, BranchPickerMode, BranchPickerState, CommitPickerState, CommitPreview, FixupMode, StashListState};
 
 /// Bordered block with a centered title.
 fn popup_block<'a>(title: impl Into<Line<'a>>, color: Color) -> Block<'a> {
@@ -82,7 +82,7 @@ fn selection_prefix(selected: bool) -> &'static str {
     if selected { "> " } else { "  " }
 }
 
-pub fn render_help(f: &mut Frame, area: Rect) {
+pub fn render_help(f: &mut Frame, area: Rect, scroll: &Scroll) {
     let section = |s: &'static str| Line::from(Span::styled(
         s, Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD),
     ));
@@ -144,7 +144,27 @@ pub fn render_help(f: &mut Frame, area: Rect) {
         key("  q / Esc     ", "Quit / close"),
     ];
 
-    render_popup(f, area, (60, 90), popup_block(" Help ", Color::Yellow), help_lines);
+    let popup_area = centered_rect(60, 90, area);
+    f.render_widget(Clear, popup_area);
+
+    // Borders take two rows; the hint and a spacer take two more.
+    let viewport = popup_area.height.saturating_sub(4) as usize;
+    let max_scroll = help_lines.len().saturating_sub(viewport).min(u16::MAX as usize) as u16;
+    scroll.max.set(max_scroll);
+
+    let block = popup_block(" Help ", Color::Yellow);
+    let inner = block.inner(popup_area);
+    f.render_widget(block, popup_area);
+    let [body, footer] = Layout::vertical([Constraint::Min(0), Constraint::Length(2)]).areas(inner);
+    f.render_widget(
+        Paragraph::new(help_lines).scroll((scroll.offset.min(max_scroll), 0)),
+        body,
+    );
+    let more = if max_scroll > 0 { "j/k: scroll   " } else { "" };
+    f.render_widget(
+        Paragraph::new(vec![Line::from(""), hint(&format!("  {more}q / Esc: close"))]),
+        footer,
+    );
 }
 
 pub fn render_commit_preview(f: &mut Frame, area: Rect, preview: &CommitPreview) {
