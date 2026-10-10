@@ -462,6 +462,91 @@ impl App {
         Ok(())
     }
 
+    /// Whether a background refresh would be safe: it rebuilds the item list,
+    /// so it must not run under a half-finished selection, popup or editor.
+    pub fn can_auto_refresh(&self) -> bool {
+        self.buffer == ActiveBuffer::Status
+            && self.editor.is_none()
+            && self.visual_anchor.is_none()
+            && self.pending_key.is_none()
+            && self.commit_preview.is_none()
+            && self.commit_picker.is_none()
+            && self.stash_list.is_none()
+            && self.branch_picker.is_none()
+            && self.branch_name_input.is_none()
+    }
+
+    /// Re-read the repo after it changed on disk, keeping expanded diffs
+    /// current and the cursor on the same item where it still exists.
+    pub fn auto_refresh(&mut self) -> Result<()> {
+        let anchor = self.items.get(self.cursor).cloned();
+        let status = self.backend.status()?;
+
+        // Cached diffs may be stale, and files may have left their section.
+        self.diff_cache.clear();
+        let present = |(section, path): &FileKey| {
+            let entries = match section {
+                Section::Staged => &status.staged,
+                Section::Unstaged => &status.unstaged,
+                Section::Untracked => &status.untracked,
+            };
+            entries.iter().any(|e| &e.path == path)
+        };
+        self.expanded.retain(present);
+        let keys: Vec<FileKey> = self.expanded.iter().cloned().collect();
+        for key in keys {
+            match self.backend.diff_file(&key.1, key.0 == Section::Staged) {
+                Ok(diff) => {
+                    self.diff_cache.insert(key, diff.into());
+                }
+                Err(_) => {
+                    self.expanded.remove(&key);
+                }
+            }
+        }
+
+        self.refresh()?;
+        if let Some(anchor) = anchor {
+            self.restore_cursor(&anchor);
+        }
+        Ok(())
+    }
+
+    /// Put the cursor back on the item equal to `anchor`, else on its file.
+    fn restore_cursor(&mut self, anchor: &StatusItem) {
+        use StatusItem::*;
+        let same = |item: &StatusItem| match (anchor, item) {
+            (Header { section: a, .. }, Header { section: b, .. }) => a == b,
+            (File { entry: a, section: sa, .. }, File { entry: b, section: sb, .. }) => a.path == b.path && sa == sb,
+            (
+                HunkHeader { file_path: a, hunk_index: ha, section: sa, .. },
+                HunkHeader { file_path: b, hunk_index: hb, section: sb, .. },
+            ) => a == b && ha == hb && sa == sb,
+            (
+                DiffLine { file_path: a, hunk_index: ha, line_in_hunk: la, section: sa, .. },
+                DiffLine { file_path: b, hunk_index: hb, line_in_hunk: lb, section: sb, .. },
+            ) => a == b && ha == hb && la == lb && sa == sb,
+            (RecentCommit { info: a }, RecentCommit { info: b }) => a.short_hash == b.short_hash,
+            (StashEntry { info: a }, StashEntry { info: b }) => a.index == b.index,
+            (UnpushedHeader { .. }, UnpushedHeader { .. }) | (RecentHeader, RecentHeader) | (StashHeader { .. }, StashHeader { .. }) => true,
+            _ => false,
+        };
+        let file_of = |item: &StatusItem| match item {
+            HunkHeader { file_path, section, .. } | DiffLine { file_path, section, .. } => Some((file_path.clone(), *section)),
+            _ => None,
+        };
+        let found = self.items.iter().position(same).or_else(|| {
+            let (path, section) = file_of(anchor)?;
+            self.items.iter().position(|item| {
+                matches!(item, File { entry, section: s, .. } if *entry.path == *path && *s == section)
+            })
+        });
+        if let Some(i) = found {
+            self.cursor = i;
+        }
+        self.clamp_cursor();
+    }
+
     /// Nearest item at or before `i` that isn't a context line; item 0 always counts.
     fn selectable_at_or_before(&self, i: usize) -> usize {
         (1..=i)
@@ -886,6 +971,30 @@ mod tests {
         assert_eq!(app.cursor, diff_line(&app, "-c"), "should skip \" b\"");
         app.move_up();
         assert_eq!(app.cursor, diff_line(&app, "+A"));
+    }
+
+    #[test]
+    fn auto_refresh_picks_up_external_edit_and_keeps_cursor() {
+        let (repo, mut app) = app_with_expanded_diff();
+        app.cursor = diff_line(&app, "-c");
+
+        // Edited outside rugit: line 3 becomes "D" instead of "C".
+        fs::write(repo.path.join("f"), "A\nb\nD\n").unwrap();
+        app.auto_refresh().unwrap();
+
+        assert!(app.items.iter().any(|item| matches!(item, StatusItem::DiffLine { line, .. } if &**line == "+D")));
+        assert!(!app.items.iter().any(|item| matches!(item, StatusItem::DiffLine { line, .. } if &**line == "+C")));
+        assert_eq!(app.cursor, diff_line(&app, "-c"), "cursor stays on the same diff line");
+    }
+
+    #[test]
+    fn auto_refresh_collapses_files_that_left_the_status() {
+        let (repo, mut app) = app_with_expanded_diff();
+        fs::write(repo.path.join("f"), "a\nb\nc\n").unwrap();
+        app.auto_refresh().unwrap();
+
+        assert!(app.expanded.is_empty());
+        assert!(!app.items.iter().any(|item| matches!(item, StatusItem::File { .. })));
     }
 
     #[test]

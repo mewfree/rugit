@@ -1,4 +1,5 @@
 use std::io;
+use std::time::Duration;
 use anyhow::Result;
 use clap::Parser;
 use crossterm::{
@@ -16,11 +17,13 @@ mod config;
 mod diff;
 mod keybindings;
 mod ui;
+mod watch;
 
 use app::{ActiveBuffer, App, BranchNameInputState, BranchNameMode, BranchPickerMode, BranchPickerState, CommitPickerState, CommitPreview, EditorIntent, EditorMode, EditorState, FixupMode, PatchOp, StashListState, StatusItem};
 use backend::{detect_backend, Backend, BackendKind};
 use config::Config;
 use keybindings::{key_to_action, Action};
+use watch::RepoWatcher;
 
 type Term = Terminal<CrosstermBackend<io::Stdout>>;
 
@@ -98,12 +101,35 @@ fn draw(terminal: &mut Term, app: &App) -> Result<()> {
 }
 
 fn run_app(terminal: &mut Term, app: &mut App) -> Result<()> {
-    // The screen only changes in response to an event, so block on the next
+    // How long the terminal must be quiet before a filesystem change is applied.
+    const QUIET: Duration = Duration::from_millis(150);
+
+    let watcher = RepoWatcher::start(app.backend.repo_root());
+    // The screen only changes in response to an event, so wait for the next
     // one and redraw only when it could have changed something.
     let mut needs_redraw = true;
+    let mut stale = false;
     while !app.should_quit {
         if needs_redraw {
             draw(terminal, app)?;
+        }
+        needs_redraw = false;
+        if !event::poll(QUIET)? {
+            // Idle. Pick up repo changes once nothing is half-done in the UI.
+            if watcher.as_ref().is_some_and(RepoWatcher::take_changed) {
+                stale = true;
+            }
+            if stale && app.can_auto_refresh() {
+                stale = false;
+                if app.auto_refresh().is_ok() {
+                    // Discard events our own refresh may have caused.
+                    if let Some(w) = &watcher {
+                        w.take_changed();
+                    }
+                    needs_redraw = true;
+                }
+            }
+            continue;
         }
         needs_redraw = match event::read()? {
             // Ignore release/repeat events reported on some platforms.

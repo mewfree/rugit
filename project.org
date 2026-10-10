@@ -50,7 +50,16 @@ Implement all Backend trait methods using =jj= subprocess calls.
 
 ** TODO Packaging (Homebrew formula, AUR PKGBUILD, Nix flake)
 
+** TODO Command palette (=:= or =M-x=)
+Fuzzy-searchable list of every action with its keybinding; Enter runs it. Doubles as discoverability and a home for rarely used commands. Reuses the =Action= enum and the log filter's matching.
+
+** TODO Keymap config
+User-remappable keys in =config.toml= (e.g. a =[keys]= table of key → action name), plus "magit" and "lazygit" presets. Needs =key_to_action= to consult a lookup table built from config instead of hard-coded matches, and the help popup / footer to render the active bindings.
+
 * Done
+
+** DONE Background auto-refresh (filesystem watcher)
+=notify= watches the repo root; the event loop polls with a 150ms quiet window and re-reads status when something changed. Ignores gitignored paths and =.git= churn (only index/HEAD/refs count). Skipped while an editor, popup, visual selection or chord is active, and applied once that ends. Expanded diffs are re-fetched and the cursor stays on the same item. =g= still refreshes by hand.
 
 ** DONE Makefile for common commands
 Targets for install, run, test and lint (clippy); =make= alone prints the help.

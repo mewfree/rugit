@@ -12,6 +12,7 @@ anyhow     = "1"
 clap       = { version = "4", features = ["derive"] }
 crossterm  = "0.29"
 git2       = "0.20"
+notify     = "8"
 ratatui    = "0.30"
 serde      = { version = "1", features = ["derive"] }
 similar    = { version = "2", features = ["text"] }
