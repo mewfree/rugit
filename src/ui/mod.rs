@@ -83,7 +83,7 @@ pub fn render(f: &mut Frame, app: &App) {
         popup::render_log_search(f, area, input);
     }
 
-    f.render_widget(Paragraph::new(build_footer(app)).style(bar), chunks[2]);
+    f.render_widget(Paragraph::new(build_footer(app, area.width as usize)).style(bar), chunks[2]);
 }
 
 fn build_head_line(app: &App) -> Line<'static> {
@@ -111,42 +111,87 @@ fn build_head_line(app: &App) -> Line<'static> {
     Line::from(spans)
 }
 
-fn build_footer(app: &App) -> Line<'static> {
+/// A footer hint, rendered as `[key]label`. Higher `priority` values are
+/// dropped first when the terminal is too narrow; 0 is never dropped.
+struct Hint {
+    key: &'static str,
+    label: &'static str,
+    priority: u8,
+}
+
+const fn hint(key: &'static str, label: &'static str, priority: u8) -> Hint {
+    Hint { key, label, priority }
+}
+
+const STATUS_HINTS: &[Hint] = &[
+    hint("[s/S]", "tage", 1),
+    hint("[u/U]", "nstage", 2),
+    hint("[x]", "discard", 5),
+    hint("[Tab]", "expand", 3),
+    hint("[c]", "ommit", 1),
+    hint("[z]", "stash", 7),
+    hint("[p]", "ush", 4),
+    hint("[F]", "pull", 4),
+    hint("[b]", "ranch", 6),
+    hint("[l]", "og", 6),
+    hint("[g]", "refresh", 8),
+    hint("[?]", "help", 0),
+    hint("[q]", "uit", 0),
+];
+
+const VISUAL_HINTS: &[Hint] = &[
+    hint("[j/k]", " extend", 3),
+    hint("[s]", "tage", 1),
+    hint("[u]", "nstage", 1),
+    hint("[x]", "discard", 2),
+    hint("[Esc]", " cancel", 0),
+];
+
+const LOG_HINTS: &[Hint] = &[
+    hint("[j/k]", " move", 2),
+    hint("[/]", " filter", 1),
+    hint("[Esc]", " clear filter", 3),
+    hint("[?]", "help", 0),
+    hint("[q]", " back", 0),
+];
+
+fn build_footer(app: &App, width: usize) -> Line<'static> {
     if let Some(msg) = &app.status_msg {
-        Line::from(vec![
+        return Line::from(vec![
             Span::styled(" ", Style::new()),
             Span::styled(msg.clone(), Style::new().fg(Color::Green)),
-        ])
-    } else {
-        let key = |s: &'static str| Span::styled(s, Style::new().fg(Color::LightCyan));
-        let sep = || Span::raw("  ");
-        Line::from(vec![
-            Span::raw(" "),
-            key("[s/S]"), Span::raw("tage"),
-            sep(),
-            key("[u/U]"), Span::raw("nstage"),
-            sep(),
-            key("[x]"), Span::raw("discard"),
-            sep(),
-            key("[Tab]"), Span::raw("expand"),
-            sep(),
-            key("[c]"), Span::raw("ommit"),
-            sep(),
-            key("[z]"), Span::raw("stash"),
-            sep(),
-            key("[p]"), Span::raw("ush"),
-            sep(),
-            key("[F]"), Span::raw("pull"),
-            sep(),
-            key("[b]"), Span::raw("ranch"),
-            sep(),
-            key("[l]"), Span::raw("og"),
-            sep(),
-            key("[g]"), Span::raw("refresh"),
-            sep(),
-            key("[?]"), Span::raw("help"),
-            sep(),
-            key("[q]"), Span::raw("uit"),
-        ])
+        ]);
     }
+
+    let hints = if app.visual_anchor.is_some() {
+        VISUAL_HINTS
+    } else if app.buffer == ActiveBuffer::Log {
+        LOG_HINTS
+    } else {
+        STATUS_HINTS
+    };
+
+    let used = |shown: &[&Hint]| {
+        1 + shown.iter().map(|h| h.key.len() + h.label.len()).sum::<usize>()
+            + 2 * shown.len().saturating_sub(1)
+    };
+    let mut shown: Vec<&Hint> = hints.iter().collect();
+    while used(&shown) > width {
+        // Drop the least important hint; among equals, the rightmost.
+        let Some((i, h)) = shown.iter().enumerate().max_by_key(|(i, h)| (h.priority, *i)) else { break };
+        if h.priority == 0 {
+            break;
+        }
+        shown.remove(i);
+    }
+
+    let mut spans = vec![Span::raw(" ")];
+    for (i, h) in shown.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw("  "));
+        }
+        spans.push(Span::styled(h.key, Style::new().fg(Color::LightCyan)));
+        spans.push(Span::raw(h.label));
+    }
+    Line::from(spans)
 }

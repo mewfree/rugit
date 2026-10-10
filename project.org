@@ -61,6 +61,9 @@ User-remappable keys in =config.toml= (e.g. a =[keys]= table of key → action n
 
 * Done
 
+** DONE Context-aware footer
+The footer lists hints for the current mode (status, visual selection, log) and, on a narrow terminal, drops the least important ones first instead of truncating mid-hint. Help and quit are never dropped.
+
 ** DONE Scrollable help popup
 Help is taller than many terminals. =j=/=k=, =d=/=u=, =g=/=G= and the mouse wheel scroll it; the hint line shows the scroll keys only when the content overflows.
 
