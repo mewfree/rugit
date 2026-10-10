@@ -229,6 +229,7 @@ mod tests {
         fn log(&self, _limit: usize) -> Result<Vec<CommitInfo>> { Ok(vec![]) }
         fn stash_list(&self) -> Result<Vec<StashInfo>> { Ok(vec![]) }
         unsupported! {
+            reopen() -> Result<Box<dyn Backend + Send>>;
             diff_file(&str, bool) -> Result<String>;
             stage_file(&str) -> Result<()>;
             unstage_file(&str) -> Result<()>;

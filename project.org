@@ -50,9 +50,6 @@ Implement all Backend trait methods using =jj= subprocess calls.
 
 ** TODO Packaging (Homebrew formula, AUR PKGBUILD, Nix flake)
 
-** TODO Async push/pull with progress indicator
-Push and pull currently run inline and block the UI (status_msg, =draw()=, then the backend call). Run them on a worker thread and report completion through the event loop, with a spinner in the footer, so the status buffer stays live (and auto-refresh keeps working) during a slow network operation. Needs a channel the loop polls alongside the watcher, and a guard against starting a second network op while one is running.
-
 ** TODO Command palette (=:= or =M-x=)
 Fuzzy-searchable list of every action with its keybinding; Enter runs it. Doubles as discoverability and a home for rarely used commands. Reuses the =Action= enum and the log filter's matching.
 
@@ -60,6 +57,9 @@ Fuzzy-searchable list of every action with its keybinding; Enter runs it. Double
 User-remappable keys in =config.toml= (e.g. a =[keys]= table of key → action name), plus "magit" and "lazygit" presets. Needs =key_to_action= to consult a lookup table built from config instead of hard-coded matches, and the help popup / footer to render the active bindings.
 
 * Done
+
+** DONE Async push/pull with progress indicator
+Push, force-push and pull run on a worker thread (=Backend::reopen= hands it its own handle) and report through a channel the event loop polls. A spinner shows in the header while it runs, the UI and auto-refresh stay live, and a second network op is refused until the first finishes.
 
 ** DONE Distinct error styling and visual-mode indicator
 Failures show in bold red with a =✗= prefix (own =error_msg= field, cleared on the next key) instead of the green info colour. Visual mode is a persistent =VISUAL= badge in the header rather than a footer message, so the context-aware footer hints stay visible while selecting.

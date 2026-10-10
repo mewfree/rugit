@@ -1,5 +1,6 @@
 use std::io;
-use std::time::Duration;
+use std::sync::mpsc::{self, TryRecvError};
+use std::time::{Duration, Instant};
 use anyhow::Result;
 use clap::Parser;
 use crossterm::{
@@ -19,7 +20,7 @@ mod keybindings;
 mod ui;
 mod watch;
 
-use app::{ActiveBuffer, App, BranchNameInputState, BranchNameMode, BranchPickerMode, BranchPickerState, CommitPickerState, CommitPreview, EditorIntent, EditorMode, EditorState, FixupMode, PatchOp, StashListState, StatusItem};
+use app::{ActiveBuffer, App, RemoteJob, BranchNameInputState, BranchNameMode, BranchPickerMode, BranchPickerState, CommitPickerState, CommitPreview, EditorIntent, EditorMode, EditorState, FixupMode, PatchOp, StashListState, StatusItem};
 use backend::{detect_backend, Backend, BackendKind};
 use config::Config;
 use keybindings::{key_to_action, Action};
@@ -110,6 +111,9 @@ fn run_app(terminal: &mut Term, app: &mut App) -> Result<()> {
     let mut needs_redraw = true;
     let mut stale = false;
     while !app.should_quit {
+        if app.remote_job.is_some() && poll_remote_job(app) {
+            needs_redraw = true;
+        }
         if needs_redraw {
             draw(terminal, app)?;
         }
@@ -119,7 +123,8 @@ fn run_app(terminal: &mut Term, app: &mut App) -> Result<()> {
                 stale = true;
             }
             // Fade highlights from the last refresh.
-            needs_redraw = app.expire_highlights();
+            // A running job needs frames to animate its spinner.
+            needs_redraw = app.expire_highlights() | app.remote_job.is_some();
             if stale && app.can_auto_refresh() {
                 stale = false;
                 if app.auto_refresh().is_ok() {
@@ -469,9 +474,9 @@ fn handle_action(terminal: &mut Term, app: &mut App, action: Action) -> Result<(
         Action::RebaseBegin => begin_chord(app, 'r', "r-"),
         Action::DropPick => open_commit_picker(app, FixupMode::Drop),
         Action::PushBegin => begin_chord(app, 'p', "P-"),
-        Action::Push => run_remote(terminal, app, "Pushing…", "Pushed.", "Push failed", |b| b.push())?,
-        Action::PushForce => run_remote(terminal, app, "Force-pushing…", "Force-pushed.", "Force-push failed", |b| b.push_force_lease())?,
-        Action::Pull => run_remote(terminal, app, "Pulling…", "Pulled.", "Pull failed", |b| b.pull())?,
+        Action::Push => start_remote(app, "Pushing…", "Pushed.", "Push failed", |b| b.push()),
+        Action::PushForce => start_remote(app, "Force-pushing…", "Force-pushed.", "Force-push failed", |b| b.push_force_lease()),
+        Action::Pull => start_remote(app, "Pulling…", "Pulled.", "Pull failed", |b| b.pull()),
         Action::VisualMode => {
             app.visual_anchor = Some(app.cursor);
         }
@@ -539,25 +544,50 @@ fn begin_chord(app: &mut App, key: char, label: &str) {
     app.status_msg = Some(label.to_string());
 }
 
-/// Push/pull. Shows `busy` while the (blocking) command runs.
-fn run_remote(
-    terminal: &mut Term,
+/// Run push/pull on a worker thread so the UI (and auto-refresh) stays live.
+/// The result is picked up by `poll_remote_job`.
+fn start_remote(
     app: &mut App,
-    busy: &str,
-    done: &str,
-    failed: &str,
-    op: impl FnOnce(&dyn Backend) -> Result<()>,
-) -> Result<()> {
-    app.status_msg = Some(busy.to_string());
-    draw(terminal, app)?;
-    let result = op(app.backend.as_ref());
-    // Refresh even on failure: a failed pull can still have changed the worktree.
-    let _ = app.refresh();
-    match result {
-        Ok(()) => app.status_msg = Some(done.to_string()),
-        Err(e) => show_error(app, failed, &e),
+    busy: &'static str,
+    done: &'static str,
+    failed: &'static str,
+    op: impl FnOnce(&dyn Backend) -> Result<()> + Send + 'static,
+) {
+    if app.remote_job.is_some() {
+        app.status_msg = Some("A push/pull is already running".to_string());
+        return;
     }
-    Ok(())
+    let worker = match app.backend.reopen() {
+        Ok(worker) => worker,
+        Err(e) => return show_error(app, failed, &e),
+    };
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        // The receiver is gone only if rugit quit; nobody is left to tell.
+        let _ = tx.send(op(worker.as_ref()));
+    });
+    app.remote_job = Some(RemoteJob { busy, done, failed, rx, started: Instant::now() });
+}
+
+/// Collect a finished push/pull. Returns whether the job completed.
+fn poll_remote_job(app: &mut App) -> bool {
+    let Some(job) = &app.remote_job else { return false };
+    let result = match job.rx.try_recv() {
+        Ok(result) => result,
+        Err(TryRecvError::Empty) => return false,
+        Err(TryRecvError::Disconnected) => Err(anyhow::anyhow!("worker thread died")),
+    };
+    let Some(job) = app.remote_job.take() else { return false };
+    // Even a failed pull can have changed the worktree. Skip while a popup or
+    // selection is open; the watcher marks the repo stale and it catches up later.
+    if app.can_auto_refresh() {
+        let _ = app.auto_refresh();
+    }
+    match result {
+        Ok(()) => app.status_msg = Some(job.done.to_string()),
+        Err(e) => show_error(app, job.failed, &e),
+    }
+    true
 }
 
 fn open_commit_preview(app: &mut App) {

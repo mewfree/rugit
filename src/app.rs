@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::ops::{Deref, Range};
 use std::path::Path;
 use std::rc::Rc;
+use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant, SystemTime};
 use anyhow::Result;
 use crossterm::event::KeyCode;
@@ -69,6 +70,24 @@ pub struct BranchNameInputState {
     pub input: String,
     pub mode: BranchNameMode,
     pub original: String,
+}
+
+/// A push/pull running on a worker thread.
+pub struct RemoteJob {
+    pub busy: &'static str,
+    pub done: &'static str,
+    pub failed: &'static str,
+    pub rx: Receiver<Result<()>>,
+    pub started: Instant,
+}
+
+impl RemoteJob {
+    /// `busy` prefixed with a spinner frame that advances with elapsed time.
+    pub fn spinner_line(&self) -> String {
+        const FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+        let frame = (self.started.elapsed().as_millis() / 100) as usize % FRAMES.len();
+        format!("{} {}", FRAMES[frame], self.busy)
+    }
 }
 
 /// Scroll offset for a popup that may be taller than its viewport.
@@ -355,6 +374,8 @@ pub struct App {
     pub error_msg: Option<String>,
     pub commit_preview: Option<CommitPreview>,
     pub help_scroll: Scroll,
+    /// Push/pull in flight; at most one at a time.
+    pub remote_job: Option<RemoteJob>,
     pub should_quit: bool,
     pub recent_commits: Vec<CommitInfo>,
     /// Flat list of visible status items (rebuilt on refresh)
@@ -399,6 +420,7 @@ impl App {
             error_msg: None,
             commit_preview: None,
             help_scroll: Scroll::new(),
+            remote_job: None,
             should_quit: false,
             recent_commits,
             items: Vec::new(),

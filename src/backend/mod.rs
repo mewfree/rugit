@@ -72,6 +72,9 @@ pub struct BranchInfo {
 pub trait Backend {
     fn repo_root(&self) -> &Path;
     fn kind_name(&self) -> &'static str;
+    /// A fresh handle on the same repository that can move to a worker thread
+    /// (e.g. for a slow push/pull) while this one keeps serving the UI.
+    fn reopen(&self) -> Result<Box<dyn Backend + Send>>;
     fn status(&self) -> Result<RepoStatus>;
     fn diff_file(&self, path: &str, staged: bool) -> Result<String>;
     fn stage_file(&self, path: &str) -> Result<()>;

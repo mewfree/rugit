@@ -100,6 +100,12 @@ fn build_head_line(app: &App) -> Line<'static> {
         ));
         spans.push(Span::raw(" "));
     }
+    if let Some(job) = &app.remote_job {
+        spans.push(Span::styled(
+            format!("{} ", job.spinner_line()),
+            Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        ));
+    }
     let status = &app.status;
     match (&status.head, &status.head_short_hash, &status.head_summary) {
         (Some(branch), hash, summary) => {

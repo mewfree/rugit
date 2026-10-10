@@ -222,6 +222,10 @@ impl Backend for GitBackend {
         "git"
     }
 
+    fn reopen(&self) -> Result<Box<dyn Backend + Send>> {
+        Ok(Box::new(Self::new(&self.root)?))
+    }
+
     fn status(&self) -> Result<RepoStatus> {
         let mut opts = StatusOptions::new();
         opts.include_untracked(true)

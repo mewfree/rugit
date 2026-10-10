@@ -29,6 +29,10 @@ impl JjBackend {
 }
 
 impl Backend for JjBackend {
+    fn reopen(&self) -> Result<Box<dyn Backend + Send>> {
+        Ok(Box::new(Self::new(&self.root)?))
+    }
+
     fn repo_root(&self) -> &Path {
         &self.root
     }
