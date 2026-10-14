@@ -23,7 +23,7 @@ fn check(out: Output) -> Result<Output> {
 fn commit_info(commit: &Commit) -> CommitInfo {
     CommitInfo {
         short_hash: format!("{:.7}", commit.id()),
-        summary: commit.summary().unwrap_or("").to_string(),
+        summary: commit.summary().ok().flatten().unwrap_or("").to_string(),
         author: commit.author().name().unwrap_or("").to_string(),
     }
 }
@@ -203,12 +203,12 @@ impl GitBackend {
         let Ok(head) = self.repo.head() else {
             return (None, None, None);
         };
-        let branch = head.shorthand().map(|s| {
+        let branch = head.shorthand().ok().map(|s| {
             if head.is_branch() { s.to_string() } else { format!("({s})") } // detached
         });
         let commit = head.peel_to_commit().ok();
         let short_hash = commit.as_ref().map(|c| format!("{:.7}", c.id()));
-        let summary = commit.as_ref().and_then(|c| c.summary().map(String::from));
+        let summary = commit.as_ref().and_then(|c| c.summary().ok().flatten().map(String::from));
         (branch, short_hash, summary)
     }
 }
@@ -423,7 +423,7 @@ impl Backend for GitBackend {
             .repo
             .head()
             .ok()
-            .and_then(|h| h.shorthand().map(String::from))
+            .and_then(|h| h.shorthand().ok().map(String::from))
             .context("Could not determine current branch")?;
         self.run_git(&["push", "--set-upstream", "origin", &branch])?;
         Ok(())
@@ -552,14 +552,14 @@ impl Backend for GitBackend {
             .enumerate()
             .map(|(index, entry)| StashInfo {
                 index,
-                summary: entry.message().unwrap_or("").to_string(),
+                summary: entry.message().ok().flatten().unwrap_or("").to_string(),
             })
             .collect())
     }
 
     fn list_branches(&self) -> Result<Vec<BranchInfo>> {
         let head_name = self.repo.head().ok()
-            .and_then(|h| h.shorthand().map(String::from))
+            .and_then(|h| h.shorthand().ok().map(String::from))
             .unwrap_or_default();
         let mut result = Vec::new();
         for branch in self.repo.branches(Some(git2::BranchType::Local))? {

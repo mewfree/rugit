@@ -11,11 +11,11 @@ path = "src/main.rs"
 anyhow     = "1"
 clap       = { version = "4", features = ["derive"] }
 crossterm  = "0.29"
-git2       = "0.20"
+git2       = "0.21"
 notify     = "8"
 ratatui    = "0.30"
 serde      = { version = "1", features = ["derive"] }
-similar    = { version = "2", features = ["text"] }
-toml       = "0.8"
-tui-textarea = { package = "tui-textarea-2", version = "0.10.2", features = ["crossterm"] }
+similar    = { version = "3", features = ["text"] }
+toml       = "1"
+tui-textarea = { package = "tui-textarea-2", version = "0.13", features = ["crossterm"] }
 unicode-width = "0.2"
