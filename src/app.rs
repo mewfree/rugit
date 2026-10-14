@@ -131,11 +131,11 @@ pub struct RemoteJob {
 }
 
 impl RemoteJob {
-    /// `busy` prefixed with a spinner frame that advances with elapsed time.
+    /// `busy` prefixed with a spinner frame, suffixed with elapsed seconds.
     pub fn spinner_line(&self) -> String {
         const FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
         let frame = (self.started.elapsed().as_millis() / 100) as usize % FRAMES.len();
-        format!("{} {}", FRAMES[frame], self.busy)
+        format!("{} {} {}s", FRAMES[frame], self.busy, self.started.elapsed().as_secs())
     }
 }
 

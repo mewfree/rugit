@@ -103,12 +103,6 @@ fn build_head_line(app: &App) -> Line<'static> {
         ));
         spans.push(Span::raw(" "));
     }
-    if let Some(job) = &app.remote_job {
-        spans.push(Span::styled(
-            format!("{} ", job.spinner_line()),
-            Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-        ));
-    }
     let status = &app.status;
     match (&status.head, &status.head_short_hash, &status.head_summary) {
         (Some(branch), hash, summary) => {
@@ -172,7 +166,26 @@ const LOG_HINTS: &[Hint] = &[
     hint("[q]", " back", 0),
 ];
 
+/// The footer, with a running push/pull's spinner at the left edge, ahead of
+/// the hints (which give up width as needed).
 fn build_footer(app: &App, width: usize) -> Line<'static> {
+    let Some(job) = &app.remote_job else {
+        return build_footer_left(app, width);
+    };
+    let label = job.spinner_line();
+    let used = label.chars().count() + 3;
+    let mut spans = vec![
+        Span::raw(" "),
+        Span::styled(label, Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        Span::styled(" │", Style::new().fg(Color::DarkGray)),
+    ];
+    if width > used + 10 {
+        spans.extend(build_footer_left(app, width - used).spans);
+    }
+    Line::from(spans)
+}
+
+fn build_footer_left(app: &App, width: usize) -> Line<'static> {
     if let Some(msg) = &app.error_msg {
         return Line::from(vec![
             Span::raw(" "),

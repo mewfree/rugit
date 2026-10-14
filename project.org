@@ -59,7 +59,7 @@ User-remappable keys in =config.toml= (e.g. a =[keys]= table of key → action n
 Fuzzy-searchable list of every action with its keybinding; typing narrows it (contiguous matches first), =Up=/=Down= or =C-n=/=C-p= select, =Enter= runs it. Run from the log, an item-based command first returns to the status buffer.
 
 ** DONE Async push/pull with progress indicator
-Push, force-push and pull run on a worker thread (=Backend::reopen= hands it its own handle) and report through a channel the event loop polls. A spinner shows in the header while it runs, the UI and auto-refresh stay live, and a second network op is refused until the first finishes.
+Push, force-push and pull run on a worker thread (=Backend::reopen= hands it its own handle) and report through a channel the event loop polls. A spinner (with elapsed seconds) is shown at the left of the footer while it runs, the UI and auto-refresh stay live, and a second network op is refused until the first finishes.
 
 ** DONE Distinct error styling and visual-mode indicator
 Failures show in bold red with a =✗= prefix (own =error_msg= field, cleared on the next key) instead of the green info colour. Visual mode is a persistent =VISUAL= badge in the header rather than a footer message, so the context-aware footer hints stay visible while selecting.
