@@ -158,23 +158,25 @@ impl Scroll {
     pub fn reset(&mut self) {
         self.offset = 0;
     }
+
+    /// Record the furthest useful offset for `total` lines in a `viewport`-tall
+    /// window. Returns it, so the caller can clamp the offset it draws at.
+    pub fn fit(&self, total: usize, viewport: usize) -> u16 {
+        let max = total.saturating_sub(viewport).min(u16::MAX as usize) as u16;
+        self.max.set(max);
+        max
+    }
 }
 
 pub struct CommitPreview {
     pub title: String,
     pub content: String,
-    pub scroll: u16,
-    /// Furthest useful scroll offset; updated by the renderer once it knows the viewport height.
-    pub max_scroll: std::cell::Cell<u16>,
+    pub scroll: Scroll,
 }
 
 impl CommitPreview {
     pub fn new(title: String, content: String) -> Self {
-        Self { title, content, scroll: 0, max_scroll: std::cell::Cell::new(u16::MAX) }
-    }
-
-    pub fn scroll_by(&mut self, lines: i16) {
-        self.scroll = self.scroll.saturating_add_signed(lines).min(self.max_scroll.get());
+        Self { title, content, scroll: Scroll::new() }
     }
 }
 
@@ -275,6 +277,14 @@ type Fingerprint = (FileKind, Option<(SystemTime, u64)>);
 
 /// How long a file touched outside rugit stays highlighted.
 const HIGHLIGHT_FOR: Duration = Duration::from_millis(1500);
+
+fn status_entries(status: &RepoStatus, section: Section) -> &[FileEntry] {
+    match section {
+        Section::Staged => &status.staged,
+        Section::Unstaged => &status.unstaged,
+        Section::Untracked => &status.untracked,
+    }
+}
 
 fn file_key(section: Section, path: &str) -> FileKey {
     (section, path.to_string())
@@ -506,11 +516,7 @@ impl App {
     }
 
     fn section_entries(&self, section: Section) -> &[FileEntry] {
-        match section {
-            Section::Staged => &self.status.staged,
-            Section::Unstaged => &self.status.unstaged,
-            Section::Untracked => &self.status.untracked,
-        }
+        status_entries(&self.status, section)
     }
 
     /// Rebuild the flat items list from current status + expanded set.
@@ -575,13 +581,19 @@ impl App {
     }
 
     pub fn refresh(&mut self) -> Result<()> {
-        self.status = self.backend.status()?;
+        let status = self.backend.status()?;
+        self.refresh_with(status);
+        Ok(())
+    }
+
+    /// `refresh`, given a status the caller already read.
+    fn refresh_with(&mut self, status: RepoStatus) {
+        self.status = status;
         self.recent_commits = self.backend.log(self.config.recent_limit).unwrap_or_default();
         self.stashes = self.backend.stash_list().unwrap_or_default();
         self.fingerprints = self.fingerprint_entries();
         self.rebuild_items();
         self.clamp_cursor();
-        Ok(())
     }
 
     fn fingerprint_entries(&self) -> HashMap<FileKey, Fingerprint> {
@@ -644,15 +656,9 @@ impl App {
         // Cached diffs may be stale, and files may have left their section.
         let old_diffs = std::mem::take(&mut self.diff_cache);
         let until = Instant::now() + HIGHLIGHT_FOR;
-        let present = |(section, path): &FileKey| {
-            let entries = match section {
-                Section::Staged => &status.staged,
-                Section::Unstaged => &status.unstaged,
-                Section::Untracked => &status.untracked,
-            };
-            entries.iter().any(|e| &e.path == path)
-        };
-        self.expanded.retain(present);
+        self.expanded.retain(|(section, path)| {
+            status_entries(&status, *section).iter().any(|e| &e.path == path)
+        });
         let keys: Vec<FileKey> = self.expanded.iter().cloned().collect();
         for key in keys {
             match self.backend.diff_file(&key.1, key.0 == Section::Staged) {
@@ -672,7 +678,7 @@ impl App {
         }
 
         let before = std::mem::take(&mut self.fingerprints);
-        self.refresh()?;
+        self.refresh_with(status);
         for (key, fingerprint) in &self.fingerprints {
             if before.get(key) != Some(fingerprint) {
                 self.highlights.insert(key.clone(), until);
@@ -901,19 +907,7 @@ impl App {
         let Some((start, end)) = self.visual_range() else { return Ok(()) };
         self.visual_anchor = None;
 
-        let lines: Vec<LineRef> = self.items
-            .iter()
-            .take(end + 1)
-            .skip(start)
-            .filter_map(|item| match item {
-                StatusItem::DiffLine { line, file_path, section, hunk_index, line_in_hunk }
-                    if *section == op.source() && diff::is_change(line) =>
-                {
-                    Some((file_path.clone(), *hunk_index, *line_in_hunk))
-                }
-                _ => None,
-            })
-            .collect();
+        let lines = self.visual_change_lines(start, end, op.source());
         let mut applied = 0;
         if !lines.is_empty() {
             applied += self.apply_lines(op, &lines)?;

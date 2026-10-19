@@ -20,9 +20,13 @@ fn check(out: Output) -> Result<Output> {
     Ok(out)
 }
 
+fn short_id(oid: Oid) -> String {
+    format!("{oid:.7}")
+}
+
 fn commit_info(commit: &Commit) -> CommitInfo {
     CommitInfo {
-        short_hash: format!("{:.7}", commit.id()),
+        short_hash: short_id(commit.id()),
         summary: commit.summary().ok().flatten().unwrap_or("").to_string(),
         author: commit.author().name().unwrap_or("").to_string(),
     }
@@ -47,6 +51,11 @@ impl GitBackend {
 
     fn run_git(&self, args: &[&str]) -> Result<Output> {
         check(self.command(args).output()?)
+    }
+
+    /// `run_git` for commands whose output isn't needed.
+    fn git(&self, args: &[&str]) -> Result<()> {
+        self.run_git(args).map(drop)
     }
 
     /// Like `run_git`, feeding `input` on stdin.
@@ -207,7 +216,7 @@ impl GitBackend {
             if head.is_branch() { s.to_string() } else { format!("({s})") } // detached
         });
         let commit = head.peel_to_commit().ok();
-        let short_hash = commit.as_ref().map(|c| format!("{:.7}", c.id()));
+        let short_hash = commit.as_ref().map(|c| short_id(c.id()));
         let summary = commit.as_ref().and_then(|c| c.summary().ok().flatten().map(String::from));
         (branch, short_hash, summary)
     }
@@ -346,8 +355,7 @@ impl Backend for GitBackend {
     }
 
     fn discard_file(&self, path: &str) -> Result<()> {
-        self.run_git(&["restore", "--", path])?;
-        Ok(())
+        self.git(&["restore", "--", path])
     }
 
     fn stage_all(&self) -> Result<()> {
@@ -370,18 +378,15 @@ impl Backend for GitBackend {
     }
 
     fn commit(&self, message: &str) -> Result<()> {
-        self.run_git(&["commit", "-m", message])?;
-        Ok(())
+        self.git(&["commit", "-m", message])
     }
 
     fn amend(&self, message: &str) -> Result<()> {
-        self.run_git(&["commit", "--amend", "-m", message])?;
-        Ok(())
+        self.git(&["commit", "--amend", "-m", message])
     }
 
     fn head_commit_message(&self) -> Result<String> {
-        let commit = self.repo.head()?.peel_to_commit()?;
-        Ok(commit.message().unwrap_or("").to_string())
+        Ok(self.repo.head()?.peel_to_commit()?.message().unwrap_or("").to_string())
     }
 
     fn commit_message(&self, hash: &str) -> Result<String> {
@@ -425,18 +430,15 @@ impl Backend for GitBackend {
             .ok()
             .and_then(|h| h.shorthand().ok().map(String::from))
             .context("Could not determine current branch")?;
-        self.run_git(&["push", "--set-upstream", "origin", &branch])?;
-        Ok(())
+        self.git(&["push", "--set-upstream", "origin", &branch])
     }
 
     fn push_force_lease(&self) -> Result<()> {
-        self.run_git(&["push", "--force-with-lease"])?;
-        Ok(())
+        self.git(&["push", "--force-with-lease"])
     }
 
     fn pull(&self) -> Result<()> {
-        self.run_git(&["pull"])?;
-        Ok(())
+        self.git(&["pull"])
     }
 
     fn log(&self, limit: usize) -> Result<Vec<CommitInfo>> {
@@ -466,18 +468,15 @@ impl Backend for GitBackend {
     }
 
     fn discard_all_unstaged(&self) -> Result<()> {
-        self.run_git(&["restore", "."])?;
-        Ok(())
+        self.git(&["restore", "."])
     }
 
     fn discard_staged_file(&self, path: &str) -> Result<()> {
-        self.run_git(&["restore", "--staged", "--worktree", "--", path])?;
-        Ok(())
+        self.git(&["restore", "--staged", "--worktree", "--", path])
     }
 
     fn discard_all_staged(&self) -> Result<()> {
-        self.run_git(&["restore", "--staged", "--worktree", "."])?;
-        Ok(())
+        self.git(&["restore", "--staged", "--worktree", "."])
     }
 
     fn discard_hunk(&self, path: &str, hunk_index: usize) -> Result<()> {
@@ -525,23 +524,19 @@ impl Backend for GitBackend {
     }
 
     fn stash(&self) -> Result<()> {
-        self.run_git(&["stash", "push"])?;
-        Ok(())
+        self.git(&["stash", "push"])
     }
 
     fn stash_pop(&self, index: usize) -> Result<()> {
-        self.run_git(&["stash", "pop", &format!("stash@{{{index}}}")])?;
-        Ok(())
+        self.git(&["stash", "pop", &format!("stash@{{{index}}}")])
     }
 
     fn stash_apply(&self, index: usize) -> Result<()> {
-        self.run_git(&["stash", "apply", &format!("stash@{{{index}}}")])?;
-        Ok(())
+        self.git(&["stash", "apply", &format!("stash@{{{index}}}")])
     }
 
     fn stash_drop(&self, index: usize) -> Result<()> {
-        self.run_git(&["stash", "drop", &format!("stash@{{{index}}}")])?;
-        Ok(())
+        self.git(&["stash", "drop", &format!("stash@{{{index}}}")])
     }
 
     /// Reads `refs/stash`'s reflog; `git stash list` would fork on every refresh.
@@ -580,23 +575,19 @@ impl Backend for GitBackend {
     }
 
     fn checkout_branch(&self, name: &str) -> Result<()> {
-        self.run_git(&["switch", name])?;
-        Ok(())
+        self.git(&["switch", name])
     }
 
     fn create_branch(&self, name: &str) -> Result<()> {
-        self.run_git(&["switch", "-c", name])?;
-        Ok(())
+        self.git(&["switch", "-c", name])
     }
 
     fn delete_branch(&self, name: &str) -> Result<()> {
-        self.run_git(&["branch", "-d", name])?;
-        Ok(())
+        self.git(&["branch", "-d", name])
     }
 
     fn rename_branch(&self, old: &str, new: &str) -> Result<()> {
-        self.run_git(&["branch", "-m", old, new])?;
-        Ok(())
+        self.git(&["branch", "-m", old, new])
     }
 }
 

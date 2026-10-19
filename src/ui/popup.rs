@@ -151,8 +151,7 @@ pub fn render_help(f: &mut Frame, area: Rect, scroll: &Scroll) {
 
     // Borders take two rows; the hint and a spacer take two more.
     let viewport = popup_area.height.saturating_sub(4) as usize;
-    let max_scroll = help_lines.len().saturating_sub(viewport).min(u16::MAX as usize) as u16;
-    scroll.max.set(max_scroll);
+    let max_scroll = scroll.fit(help_lines.len(), viewport);
 
     let block = popup_block(" Help ", Color::Yellow);
     let inner = block.inner(popup_area);
@@ -192,12 +191,11 @@ pub fn render_commit_preview(f: &mut Frame, area: Rect, preview: &CommitPreview)
     lines.push(hint("  q / Esc to close"));
 
     let viewport = popup_area.height.saturating_sub(2) as usize;
-    let max_scroll = lines.len().saturating_sub(viewport).min(u16::MAX as usize) as u16;
-    preview.max_scroll.set(max_scroll);
+    let max_scroll = preview.scroll.fit(lines.len(), viewport);
 
     let paragraph = Paragraph::new(lines)
         .block(popup_block(format!(" {} ", preview.title), Color::Yellow))
-        .scroll((preview.scroll.min(max_scroll), 0));
+        .scroll((preview.scroll.offset.min(max_scroll), 0));
 
     f.render_widget(paragraph, popup_area);
 }

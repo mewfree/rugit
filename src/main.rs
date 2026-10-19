@@ -161,7 +161,7 @@ fn handle_mouse(app: &mut App, kind: MouseEventKind) -> bool {
     };
     let lines = if down { 3 } else { -3 };
     match app.commit_preview.as_mut() {
-        Some(preview) => preview.scroll_by(lines),
+        Some(preview) => preview.scroll.by(lines),
         None if app.buffer == ActiveBuffer::Help => app.help_scroll.by(lines),
         None if down => app.move_down(),
         None => app.move_up(),
@@ -396,10 +396,10 @@ fn handle_preview_key(app: &mut App, code: KeyCode) {
     let Some(preview) = app.commit_preview.as_mut() else { return };
     match code {
         KeyCode::Char('q') | KeyCode::Esc => app.commit_preview = None,
-        KeyCode::Char('j') | KeyCode::Down => preview.scroll_by(1),
-        KeyCode::Char('k') | KeyCode::Up => preview.scroll_by(-1),
-        KeyCode::Char('d') => preview.scroll_by(20),
-        KeyCode::Char('u') => preview.scroll_by(-20),
+        KeyCode::Char('j') | KeyCode::Down => preview.scroll.by(1),
+        KeyCode::Char('k') | KeyCode::Up => preview.scroll.by(-1),
+        KeyCode::Char('d') => preview.scroll.by(20),
+        KeyCode::Char('u') => preview.scroll.by(-20),
         _ => {}
     }
 }
