@@ -350,6 +350,8 @@ pub enum PatchOp {
     Stage,
     Unstage,
     Discard,
+    /// Revert staged changes from both the index and the worktree.
+    DiscardStaged,
 }
 
 impl PatchOp {
@@ -357,7 +359,7 @@ impl PatchOp {
     fn source(self) -> Section {
         match self {
             PatchOp::Stage | PatchOp::Discard => Section::Unstaged,
-            PatchOp::Unstage => Section::Staged,
+            PatchOp::Unstage | PatchOp::DiscardStaged => Section::Staged,
         }
     }
 
@@ -365,7 +367,7 @@ impl PatchOp {
     fn destination(self) -> Section {
         match self {
             PatchOp::Stage => Section::Staged,
-            PatchOp::Unstage | PatchOp::Discard => Section::Unstaged,
+            PatchOp::Unstage | PatchOp::Discard | PatchOp::DiscardStaged => Section::Unstaged,
         }
     }
 
@@ -378,7 +380,7 @@ impl PatchOp {
         match self {
             PatchOp::Stage => "Staged",
             PatchOp::Unstage => "Unstaged",
-            PatchOp::Discard => "Discarded",
+            PatchOp::Discard | PatchOp::DiscardStaged => "Discarded",
         }
     }
 
@@ -386,6 +388,7 @@ impl PatchOp {
         match self {
             PatchOp::Stage | PatchOp::Unstage => backend.apply_patch(patch, self.reverse()),
             PatchOp::Discard => backend.discard_patch(patch),
+            PatchOp::DiscardStaged => backend.discard_staged_patch(patch),
         }
     }
 }
@@ -876,6 +879,23 @@ impl App {
         }
     }
 
+    /// Change lines of `section` among items `start..=end`.
+    fn visual_change_lines(&self, start: usize, end: usize, section: Section) -> Vec<LineRef> {
+        self.items
+            .iter()
+            .take(end + 1)
+            .skip(start)
+            .filter_map(|item| match item {
+                StatusItem::DiffLine { line, file_path, section: s, hunk_index, line_in_hunk }
+                    if *s == section && diff::is_change(line) =>
+                {
+                    Some((file_path.clone(), *hunk_index, *line_in_hunk))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Apply `op` to every change line in the visual selection, then leave visual mode.
     pub fn apply_visual_selection(&mut self, op: PatchOp) -> Result<()> {
         let Some((start, end)) = self.visual_range() else { return Ok(()) };
@@ -894,11 +914,20 @@ impl App {
                 _ => None,
             })
             .collect();
-        if lines.is_empty() {
+        let mut applied = 0;
+        if !lines.is_empty() {
+            applied += self.apply_lines(op, &lines)?;
+        }
+        // Discard also covers staged lines, which need the index patched too.
+        if matches!(op, PatchOp::Discard) {
+            let staged = self.visual_change_lines(start, end, Section::Staged);
+            if !staged.is_empty() {
+                applied += self.apply_lines(PatchOp::DiscardStaged, &staged)?;
+            }
+        }
+        if applied == 0 {
             return Ok(());
         }
-
-        let applied = self.apply_lines(op, &lines)?;
         self.status_msg = Some(format!("{} {applied} line(s)", op.verb()));
         Ok(())
     }
@@ -992,6 +1021,13 @@ impl App {
                 // Re-fetch the diff so remaining hunks stay visible.
                 self.refresh_file_diffs(&[&file_path], Section::Unstaged)?;
                 self.status_msg = Some(format!("Discarded hunk {}", hunk_index + 1));
+            }
+            StatusItem::HunkHeader { hunk_index, file_path, section: Section::Staged, .. } => {
+                self.apply_hunk(PatchOp::DiscardStaged, &file_path, hunk_index)?;
+            }
+            StatusItem::DiffLine { ref line, section, .. } if diff::is_change(line) => {
+                let op = if section == Section::Staged { PatchOp::DiscardStaged } else { PatchOp::Discard };
+                self.apply_at_cursor(op, item)?;
             }
             _ => {}
         }
@@ -1246,6 +1282,67 @@ mod tests {
         assert!(app.visual_anchor.is_none());
         // The staged side is expanded to show the result.
         assert!(app.expanded.contains(&(Section::Staged, "f".to_string())));
+    }
+
+    fn app_with_staged_diff() -> (TestRepo, App) {
+        let repo = TestRepo::new();
+        repo.commit("f", "a\nb\nc\n", "base");
+        fs::write(repo.path.join("f"), "A\nb\nC\n").unwrap();
+        repo.stdout(&["add", "f"]);
+        let mut app = App::new(Box::new(repo.backend()), Config::default()).unwrap();
+        app.cursor = find(&app, |item| matches!(item, StatusItem::File { section: Section::Staged, .. }));
+        app.toggle_expand_at_cursor();
+        (repo, app)
+    }
+
+    #[test]
+    fn visual_selection_unstages_staged_lines() {
+        let (repo, mut app) = app_with_staged_diff();
+        app.visual_anchor = Some(diff_line(&app, "-a"));
+        app.cursor = diff_line(&app, "+A");
+        app.apply_visual_selection(PatchOp::Unstage).unwrap();
+        assert_eq!(repo.stdout(&["show", ":f"]), "a\nb\nC\n");
+    }
+
+    #[test]
+    fn visual_selection_discards_staged_lines() {
+        let (repo, mut app) = app_with_staged_diff();
+        app.visual_anchor = Some(diff_line(&app, "-a"));
+        app.cursor = diff_line(&app, "+A");
+        app.apply_visual_selection(PatchOp::Discard).unwrap();
+        assert_eq!(repo.stdout(&["show", ":f"]), "a\nb\nC\n");
+        assert_eq!(fs::read_to_string(repo.path.join("f")).unwrap(), "a\nb\nC\n");
+    }
+
+    #[test]
+    fn visual_selection_unstages_lines_of_new_file() {
+        let repo = TestRepo::new();
+        repo.commit("f", "a\n", "base");
+        fs::write(repo.path.join("g"), "1\n2\n3\n").unwrap();
+        repo.stdout(&["add", "g"]);
+        let mut app = App::new(Box::new(repo.backend()), Config::default()).unwrap();
+        app.cursor = find(&app, |item| matches!(item, StatusItem::File { section: Section::Staged, .. }));
+        app.toggle_expand_at_cursor();
+        app.visual_anchor = Some(diff_line(&app, "+2"));
+        app.cursor = diff_line(&app, "+3");
+        app.apply_visual_selection(PatchOp::Unstage).unwrap();
+        assert!(app.error_msg.is_none());
+        assert_eq!(repo.stdout(&["show", ":g"]), "1\n");
+    }
+
+    #[test]
+    fn discarding_staged_line_of_new_file() {
+        let repo = TestRepo::new();
+        repo.commit("f", "a\n", "base");
+        fs::write(repo.path.join("g"), "1\n2\n").unwrap();
+        repo.stdout(&["add", "g"]);
+        let mut app = App::new(Box::new(repo.backend()), Config::default()).unwrap();
+        app.cursor = find(&app, |item| matches!(item, StatusItem::File { section: Section::Staged, .. }));
+        app.toggle_expand_at_cursor();
+        app.cursor = diff_line(&app, "+1");
+        app.discard_at_cursor().unwrap();
+        assert_eq!(fs::read_to_string(repo.path.join("g")).unwrap(), "2\n");
+        assert_eq!(repo.stdout(&["show", ":g"]), "2\n");
     }
 
     #[test]

@@ -461,6 +461,10 @@ impl Backend for GitBackend {
         self.pipe_git(&["apply", "--reverse"], patch)
     }
 
+    fn discard_staged_patch(&self, patch: &str) -> Result<()> {
+        self.pipe_git(&["apply", "--index", "--reverse"], patch)
+    }
+
     fn discard_all_unstaged(&self) -> Result<()> {
         self.run_git(&["restore", "."])?;
         Ok(())

@@ -103,6 +103,7 @@ pub trait Backend {
     fn show_commit(&self, hash: &str) -> Result<String>;
     fn apply_patch(&self, patch: &str, reverse: bool) -> Result<()>;
     fn discard_patch(&self, patch: &str) -> Result<()>;
+    fn discard_staged_patch(&self, patch: &str) -> Result<()>;
     fn discard_hunk(&self, path: &str, hunk_index: usize) -> Result<()>;
     fn discard_all_unstaged(&self) -> Result<()>;
     fn discard_staged_file(&self, path: &str) -> Result<()>;

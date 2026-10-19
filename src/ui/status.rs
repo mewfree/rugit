@@ -247,6 +247,7 @@ mod tests {
             show_commit(&str) -> Result<String>;
             apply_patch(&str, bool) -> Result<()>;
             discard_patch(&str) -> Result<()>;
+            discard_staged_patch(&str) -> Result<()>;
             discard_hunk(&str, usize) -> Result<()>;
             discard_all_unstaged() -> Result<()>;
             discard_staged_file(&str) -> Result<()>;

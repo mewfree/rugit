@@ -35,6 +35,24 @@ impl<'a> Hunks<'a> {
     }
 }
 
+/// Rewrite a new-file/deleted-file header as an ordinary modification.
+fn modification_header(header: &[&str]) -> Vec<String> {
+    let path = header.iter().find_map(|l| {
+        l.strip_prefix("+++ b/").or_else(|| l.strip_prefix("--- a/"))
+    });
+    header
+        .iter()
+        .filter(|l| {
+            !l.starts_with("new file mode") && !l.starts_with("deleted file mode") && !l.starts_with("index ")
+        })
+        .map(|l| match (*l, path) {
+            ("--- /dev/null", Some(p)) => format!("--- a/{p}"),
+            ("+++ /dev/null", Some(p)) => format!("+++ b/{p}"),
+            _ => l.to_string(),
+        })
+        .collect()
+}
+
 fn push_lines<S: AsRef<str>>(out: &mut String, lines: &[S]) {
     for line in lines {
         out.push_str(line.as_ref());
@@ -85,7 +103,15 @@ pub fn lines_patch(
 ) -> Option<String> {
     let hunks = Hunks::parse(diff)?;
     let (header, body) = hunks.hunk(hunk_index)?.split_first()?;
-    let (old_start, new_start) = parse_hunk_starts(header)?;
+    let (mut old_start, mut new_start) = parse_hunk_starts(header)?;
+    // Partially applying a new/deleted file's diff leaves a file behind, so it
+    // must be a plain modification: git rejects "new file" with context lines.
+    if old_start == 0 {
+        old_start = new_start;
+    }
+    if new_start == 0 {
+        new_start = old_start;
+    }
     let (as_context, dropped) = if reverse { ('+', '-') } else { ('-', '+') };
 
     let mut new_body: Vec<String> = Vec::with_capacity(body.len());
@@ -111,7 +137,7 @@ pub fn lines_patch(
             .count()
     };
     let mut patch = String::new();
-    push_lines(&mut patch, hunks.file_header());
+    push_lines(&mut patch, &modification_header(hunks.file_header()));
     let _ = writeln!(patch, "@@ -{old_start},{} +{new_start},{} @@", count('-'), count('+'));
     push_lines(&mut patch, &new_body);
     Some(patch)
